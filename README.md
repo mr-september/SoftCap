@@ -41,6 +41,10 @@ y = act(x)
 pytest tests/
 ```
 
+## Citation
+
+If you use this work, please cite the preprint (arXiv link forthcoming). The full paper is available as [main.pdf](main.pdf).
+
 ## License
 
 MIT. See `LICENSE`.
