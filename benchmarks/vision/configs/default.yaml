@@ -1,0 +1,47 @@
+# ResNet-18 / CIFAR-100 benchmark configuration
+# All values are FIXED across activation runs.
+
+model:
+  architecture: resnet18
+  num_classes: 100
+  # Activation function is swapped programmatically (not configurable here)
+
+data:
+  dataset: CIFAR-100
+  input_size: 32
+  channels: 3
+  augmentation:
+    - RandomCrop(32, padding=4)
+    - RandomHorizontalFlip()
+  normalization:
+    mean: [0.5071, 0.4867, 0.4408]
+    std:  [0.2675, 0.2565, 0.2761]
+
+training:
+  epochs: 200
+  batch_size: 128
+  optimizer: SGD
+  lr: 0.1
+  momentum: 0.9
+  weight_decay: 5.0e-4
+  scheduler: CosineAnnealingLR
+  scheduler_T_max: 200        # matches epochs
+
+# Cap-aware optimizer configuration
+activation_params:
+  a_lr_factor: 0.1            # lr for learnable `a` = LR * 0.1
+  a_weight_decay: 0.0         # no WD on `a` (prevents drift toward 0)
+
+seeds: [42, 123, 456]
+
+efficiency:
+  mixed_precision: true       # FP16 AMP on Turing GPUs
+  channels_last: true         # Conv memory layout optimization
+  torch_compile: false        # Enable with --compile flag
+  cudnn_deterministic: true   # Reproducibility over speed
+  num_workers: 4              # DataLoader workers
+
+expected_baselines:
+  ReLU:  77.5   # ± 0.3%
+  GELU:  77.5   # ± 0.3%
+  SiLU:  77.5   # ± 0.3%

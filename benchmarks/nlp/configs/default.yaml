@@ -1,0 +1,36 @@
+# DistilBERT / GLUE benchmark configuration
+# All values are FIXED across activation runs.
+
+model:
+  architecture: distilbert-base-uncased
+  pretrained: true
+  # Activation swapped in FFN layers only (not attention)
+
+data:
+  dataset: GLUE
+  priority_tasks: [sst2, mnli, qnli, mrpc]
+  optional_tasks: [qqp, cola, stsb, rte]
+  max_length: 128
+
+training:
+  epochs: 3
+  batch_size: 32
+  optimizer: AdamW
+  lr: 2.0e-5
+  weight_decay: 0.01
+  warmup_steps: 500
+  scheduler: linear_with_warmup
+
+seeds: [42, 123, 456]
+
+efficiency:
+  mixed_precision: true       # FP16 AMP
+  torch_compile: false        # Not tested with HF models yet
+  cudnn_deterministic: true
+  num_workers: 2
+
+expected_baselines:            # Dev set, GELU (default activation)
+  sst2: 91.5                   # ± 0.5%
+  mnli: 82.5                   # ± 0.5% (matched)
+  qnli: 88.5                   # ± 0.5%
+  mrpc: 87.5                   # ± 1.0%

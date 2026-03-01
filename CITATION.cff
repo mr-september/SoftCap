@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: >
+  If you use SoftCap, SwishCap, or SparseCap in your work,
+  please cite the paper below.
+title: "Beyond ReLU and GELU: SoftCap Bounded Activations for Stability and Sparsity"
+authors:
+  - family-names: Cai
+    given-names: Larry
+    affiliation: "Monash Institute of Pharmaceutical Sciences, Monash University"
+    email: "larry.cai@monash.edu"
+  - family-names: Tang
+    given-names: Jie
+    affiliation: "Monash Institute of Pharmaceutical Sciences, Monash University"
+    email: "jie.tang4@monash.edu"
+version: "1.0.0"
+date-released: "2026-03-01"
+license: MIT
+repository-code: "https://github.com/softcap-research/softcap"
+abstract: >
+  SoftCap introduces a family of three parametric activation functions
+  (SoftCap, SwishCap, SparseCap) with bounded output range and controlled
+  smoothness properties (C0, C1, C2 respectively). The family addresses
+  representational collapse and anisotropic biases in deep learning,
+  showing improved behaviour in grokking, out-of-distribution
+  extrapolation, and sparse coding tasks relative to ReLU, GELU, and SiLU.
+keywords:
+  - activation functions
+  - deep learning
+  - isotropy
+  - sparse representations
+  - grokking
+  - out-of-distribution generalization
