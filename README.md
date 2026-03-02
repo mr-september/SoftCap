@@ -2,7 +2,7 @@
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red.svg)](https://pytorch.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ![SoftCap Family](paper/figures/fig1_softcap_family.png)
 
@@ -24,13 +24,66 @@ cd SoftCap
 pip install -r requirements.txt
 ```
 
-## Quick usage
+## PyTorch Implementation & Quick Usage
+
+The canonical PyTorch implementations of the SoftCap family are provided below for immediate accessibility.
+
+```python
+import torch
+import torch.nn as nn
+
+class SoftCap(nn.Module):
+    """SoftCap: f(x)=0 for x<=0 else a*tanh(x)."""
+    def __init__(self, a_init: float = 1.0) -> None:
+        super().__init__()
+        self.a = nn.Parameter(torch.tensor(float(a_init)))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        a = torch.clamp(self.a, min=1e-3)
+        output = torch.zeros_like(x)
+        pos = x > 0
+        output[pos] = a * torch.tanh(x[pos])
+        return output
+
+class SwishCap(nn.Module):
+    """SwishCap: C1 smooth notch + tanh positive branch scaled by a."""
+    def __init__(self, a_init: float = 1.0) -> None:
+        super().__init__()
+        self.a = nn.Parameter(torch.tensor(float(a_init)))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        a = torch.clamp(self.a, min=1e-3)
+        s = torch.sigmoid(a * x)
+        neg = 2 * a * x * s
+        pos = a * torch.tanh(x)
+        return torch.where(x <= 0, neg, pos)
+
+class SparseCap(nn.Module):
+    """SparseCap: minimum-degree C2 hard-zero quintic notch with parametric scale a."""
+    def __init__(self, a_init: float = 1.0) -> None:
+        super().__init__()
+        self.a = nn.Parameter(torch.tensor(float(a_init)))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        a = torch.clamp(self.a, min=1e-3)
+        notch = (x > -a) & (x <= 0.0)
+        pos = x > 0.0
+
+        output = torch.zeros_like(x)
+        x_q = x[notch]
+        x_plus_a = x_q + a
+        output[notch] = x_q * (x_plus_a ** 3) * (a - 3.0 * x_q) / (a ** 3)
+        output[pos] = a * torch.tanh(x[pos])
+        return output
+```
+
+You can also import them from the module or copy them directly into your project:
 
 ```python
 import torch
 from softcap.activations import SoftCap, SwishCap, SparseCap
 
-act = SparseCap(a_init=1.0, learnable=False)
+act = SparseCap(a_init=1.0)
 x = torch.randn(32, 128)
 y = act(x)
 ```
@@ -47,4 +100,4 @@ If you use this work, please cite the preprint (arXiv link forthcoming). The ful
 
 ## License
 
-MIT. See `LICENSE`.
+Apache 2.0. See `LICENSE`.

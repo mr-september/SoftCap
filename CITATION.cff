@@ -14,7 +14,7 @@ authors:
     email: "jie.tang4@monash.edu"
 version: "1.0.0"
 date-released: "2026-03-01"
-license: MIT
+license: Apache-2.0
 repository-code: "https://github.com/softcap-research/softcap"
 abstract: >
   SoftCap introduces a family of three parametric activation functions
@@ -30,3 +30,20 @@ keywords:
   - sparse representations
   - grokking
   - out-of-distribution generalization
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.18829083
+    description: "Zenodo preprint"
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Cai
+      given-names: Larry
+    - family-names: Tang
+      given-names: Jie
+  title: "Beyond ReLU and GELU: SoftCap Bounded Activations for Stability and Sparsity"
+  year: 2026
+  publisher:
+    name: Zenodo
+  doi: 10.5281/zenodo.18829083
+  url: "https://doi.org/10.5281/zenodo.18829083"
