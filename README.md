@@ -96,8 +96,23 @@ pytest tests/
 
 ## Citation
 
-If you use this work, please cite the preprint (arXiv link forthcoming). The full paper is available as [main.pdf](main.pdf).
+If you use this work, please cite the preprint:
+
+**Cai, L., & Tang, J. (2026). Beyond ReLU and GELU: SoftCap Bounded Activations for Stability and Sparsity. Zenodo. https://doi.org/10.5281/zenodo.18829083**
+
+```bibtex
+@article{cai2026beyond,
+  title={Beyond ReLU and GELU: SoftCap Bounded Activations for Stability and Sparsity},
+  author={Cai, Larry and Tang, Jie},
+  journal={Zenodo},
+  year={2026},
+  doi={10.5281/zenodo.18829083},
+  url={https://doi.org/10.5281/zenodo.18829083}
+}
+```
+
+The full paper is also available as [main.pdf](main.pdf).
 
 ## License
 
-Apache 2.0. See `LICENSE`.
+Apache 2.0. See [LICENSE`.
