@@ -56,3 +56,20 @@ def test_removed_cubic_quartic_classes_not_present():
     ]
     for name in removed:
         assert not hasattr(activations, name), f"Unexpected legacy class still present: {name}"
+
+
+def test_default_activation_helpers_keep_release_surface_small():
+    from softcap.activations import get_default_activations, get_full_default_activations
+    from softcap.compatibility import get_all_activations
+
+    assert set(get_default_activations()) == {
+        "SoftCap",
+        "SwishCap",
+        "SparseCap",
+        "ReLU",
+        "Tanh",
+        "GELU",
+        "SiLU",
+    }
+    assert {"ReLU6", "HardTanh"}.issubset(set(get_full_default_activations()))
+    assert {"ReLU6", "HardTanh"}.issubset(set(get_all_activations()))

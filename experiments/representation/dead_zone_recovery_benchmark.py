@@ -22,8 +22,8 @@ after training a simple MNIST MLP.
 This produces the histograms/bar charts for §4.1 of the paper.
 
 Usage:
-    python mechanistic_interpretability/sparse_coding/dead_zone_sparsity_analysis.py
-    python mechanistic_interpretability/sparse_coding/dead_zone_sparsity_analysis.py --quick
+    python experiments/representation/dead_zone_recovery_benchmark.py
+    python experiments/representation/dead_zone_recovery_benchmark.py --quick
 """
 
 import sys
@@ -375,7 +375,7 @@ def main():
     parser.add_argument('--seeds', type=int, nargs='+', default=[0, 1, 2], help='Seeds')
     parser.add_argument('--epochs', type=int, default=10, help='Training epochs')
     parser.add_argument('--output-dir', type=str,
-                        default='mechanistic_interpretability/sparse_coding/dead_zone_analysis')
+                        default='runs/representation/dead_zone_analysis')
     args = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

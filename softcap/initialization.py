@@ -1,17 +1,3 @@
-# Copyright 2026 Larry Cai and Jie Tang
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """
 SoftCap Initialization Module
 
@@ -67,7 +53,7 @@ from typing import Optional, Literal
 # Empirically derived gains for SoftCap variants at a=1.0.
 # Measured by scripts/theory/compute_gains_and_propagation.py (500k MC samples).
 # Gain := std(f(x)) / std(x) for x ~ N(0,1).
-SOFTCAP_GAINS = {
+SOFTLU_GAINS = {
     'tanh_softcap': 0.3459,
     'smooth_notch_v2': 0.5267,    # V2 (different negative-side geometry)
     'quintic_notch': 0.4012,
@@ -100,7 +86,7 @@ def calculate_softcap_gain(
         >>> gain = calculate_softcap_gain('tanh_softcap', param_a=1.0)
         >>> std = gain / math.sqrt(fan_in)
     """
-    base_gain = SOFTCAP_GAINS.get(variant, 0.7)
+    base_gain = SOFTLU_GAINS.get(variant, 0.7)
 
     # Heuristic parametric adjustment. The true gain-vs-a relationship is
     # nonlinear and variant-specific — this approximation can be 40%+ off.
@@ -298,7 +284,9 @@ _INIT_LOOKUP = {
 
     # Controls
     'ReLU': 'xavier',
+    'ReLU6': 'xavier',
     'Tanh': 'xavier',
+    'HardTanh': 'xavier',
     'GELU': 'xavier',
     'SiLU': 'orthogonal',
 }
@@ -339,7 +327,7 @@ def get_recommended_init(activation_name: str) -> str:
         return 'orthogonal'
 
     # Controls
-    if name in {'relu', 'tanh', 'gelu'}:
+    if name in {'relu', 'relu6', 'tanh', 'hardtanh', 'gelu'}:
         return 'xavier'
     if name in {'silu'}:
         return 'orthogonal'

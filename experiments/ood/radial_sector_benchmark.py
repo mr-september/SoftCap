@@ -283,7 +283,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--n-seeds', type=int, default=5)
-    parser.add_argument('--output-dir', type=str, default='mechanistic_interpretability/latent_geometry/ood/angular')
+    parser.add_argument('--output-dir', type=str, default='runs/ood/angular')
     parser.add_argument('--test-radii', type=str, default='2.5,3.0,3.5,4.0,4.5,5.0,7.5,10.0')
     parser.add_argument('--force', action='store_true', help='Recompute all seeds even if cached')
     parser.add_argument('--resume', dest='resume', action='store_true')

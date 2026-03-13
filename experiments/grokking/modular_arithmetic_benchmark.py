@@ -34,7 +34,7 @@ Outputs
 
 WSL example
   wsl -e bash -lc 'cd /mnt/e/SoftCap; source softcap_env/bin/activate; \\
-    python mechanistic_interpretability/grokking/modular_arithmetic_benchmark.py --all-activations --mode standard'
+    python experiments/grokking/modular_arithmetic_benchmark.py --all-activations --mode standard'
 """
 
 import argparse
@@ -64,6 +64,7 @@ project_root = _repo_p
 sys.path.insert(0, str(project_root))
 
 from softcap.control_activations import (
+    get_bounded_controls,
     get_control_activations,
     get_standard_experimental_set,
     get_astar_activations,
@@ -773,12 +774,12 @@ class GrokkingBenchmark:
             activations = get_extended_astar_activations()
             print("\nRunning extended a* conditions (canonical variants fixed/learnable)")
         elif args.activation:
-            # Check in both standard and a* sets
-            all_acts = get_standard_experimental_set()
-            all_acts.update(get_astar_activations())
-            all_acts.update(get_extended_astar_activations())
+            all_acts = get_default_activations()
+            all_acts.update(get_bounded_controls())
             if args.activation not in all_acts:
-                raise ValueError(f"Unknown activation: {args.activation}. Available: {list(all_acts.keys())}")
+                raise ValueError(
+                    f"Unknown activation: {args.activation}. Available: {sorted(all_acts.keys())}"
+                )
             activations = {args.activation: all_acts[args.activation]}
             print(f"\nRunning single activation: {args.activation}")
         else:
@@ -889,7 +890,7 @@ def main():
     parser.add_argument('--eval-interval', type=int, default=100, help='Evaluation interval (default: 100)')
 
     # Paths
-    parser.add_argument('--output-dir', type=str, default='mechanistic_interpretability/grokking',
+    parser.add_argument('--output-dir', type=str, default='runs/grokking',
                        help='Output directory')
 
     # Repro / statistics

@@ -351,7 +351,7 @@ def main():
     parser.add_argument('--epochs', type=int, default=20)
     parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--output-dir', type=str, default='mechanistic_interpretability/latent_geometry/ood/magnitude_shift/standard')
+    parser.add_argument('--output-dir', type=str, default='runs/ood/magnitude_shift/standard')
     parser.add_argument('--n-seeds', type=int, default=5)
     parser.add_argument('--resume', dest='resume', action='store_true')
     parser.add_argument('--no-resume', dest='resume', action='store_false')

@@ -1,27 +1,13 @@
-# Copyright 2026 Larry Cai and Jie Tang
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """
-ResNet-20 CIFAR-100 Experiment
+ResNet-20 CIFAR-100 experiment.
 
-This module implements ResNet-20 classification on CIFAR-100 as part of Thrust 2:
-Modern Architecture Viability. Tests SoftCap in residual networks with batch 
-normalization and includes A/B testing for BatchNorm dependency analysis.
+This module trains a ResNet-20 with swappable activations and supports the
+paper-facing convergence and BatchNorm comparison runs.
 """
 
 import os
 import sys
+import random
 from pathlib import Path
 import torch
 import torch.nn as nn
@@ -38,6 +24,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from experiments.base.base_experiment import DomainExperiment
 from softcap.parallel_utils import optimize_dataloader
+
+
+def _set_global_seed(seed: int) -> None:
+    """Keep checkpoint reruns reproducible across CPU/GPU paths."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 class _CIFARBasicBlock(nn.Module):
@@ -125,7 +122,7 @@ class _CIFARResNet20(nn.Module):
 
 class ResNet20Experiment(DomainExperiment):
     """ResNet-20 CIFAR-100 experiment with SoftCap and baseline activations."""
-    
+
     def __init__(
         self,
         name: str = "resnet20_cifar100",
@@ -134,11 +131,12 @@ class ResNet20Experiment(DomainExperiment):
         learning_rate: float = 0.1,
         num_epochs: int = 100,
         use_batch_norm: bool = True,
+        seed: int = 42,
         **kwargs
     ):
         """
         Initialize the ResNet-20 CIFAR-100 experiment.
-        
+
         Args:
             name: Experiment name
             activation: Activation function to use
@@ -149,14 +147,15 @@ class ResNet20Experiment(DomainExperiment):
             **kwargs: Additional arguments for parent class
         """
         super().__init__(name=name, **kwargs)
-        
+
         # Experiment parameters
         self.activation = activation.lower()
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.num_epochs = num_epochs
         self.use_batch_norm = use_batch_norm
-        
+        self.seed = seed
+
         # Update metadata
         self.metadata.update({
             'activation': activation,
@@ -164,13 +163,14 @@ class ResNet20Experiment(DomainExperiment):
             'learning_rate': learning_rate,
             'num_epochs': num_epochs,
             'use_batch_norm': use_batch_norm,
+            'seed': seed,
             'dataset': 'CIFAR-100',
             'model': 'ResNet-20',
-            'thrust': 'Thrust 2: Modern Architecture Viability'
+            'track': 'resnet20_cifar100'
         })
-        
+
         self.logger.info(f"Initialized ResNet-20 CIFAR-100 experiment with {activation} activation")
-    
+
     def create_model(self) -> nn.Module:
         """Create the ResNet-20 model with the specified activation."""
         return _CIFARResNet20(
@@ -178,7 +178,7 @@ class ResNet20Experiment(DomainExperiment):
             num_classes=100,
             use_batch_norm=self.use_batch_norm,
         )
-    
+
     def _get_activation_function(self) -> nn.Module:
         """Get activation function instance."""
         from softcap.control_activations import (
@@ -186,19 +186,68 @@ class ResNet20Experiment(DomainExperiment):
             get_extended_astar_activations,
             get_standard_experimental_set
         )
-        
-        # 1. Check Extended Astar Set (The modern standard)
+        from softcap.activations import SoftCap, SwishCap, SparseCap
+
+        family_defaults = {
+            'softcap': (SoftCap, 2.890625),
+            'swishcap': (SwishCap, 2.433594),
+            'sparsecap': (SparseCap, 2.14),
+        }
+
+        def _cap_variant(factory: nn.Module, a_init: float, learnable: bool) -> nn.Module:
+            activation = factory(a_init=a_init)
+            if hasattr(activation, 'a'):
+                activation.a.requires_grad_(learnable)
+            return activation
+
+        def _maybe_named_cap_variant(activation_name: str) -> Optional[nn.Module]:
+            normalized = activation_name.lower().replace('-', '_')
+            aliases = {
+                'parametric_tanh_softcap': 'softcap',
+                'parametrictanhsoftcap': 'softcap',
+                'tanhsoftcap': 'softcap',
+                'parametricsmoothnotchtanhsoftcapv2': 'swishcap',
+                'smoothnotchv2': 'swishcap',
+                'parametricquinticnotchtanhsoftcap': 'sparsecap',
+                'quinticnotch': 'sparsecap',
+            }
+            normalized = aliases.get(normalized, normalized)
+
+            if normalized in family_defaults:
+                factory, a_star = family_defaults[normalized]
+                return _cap_variant(factory, a_star, learnable=False)
+
+            for family_name, (factory, a_star) in family_defaults.items():
+                if not normalized.startswith(family_name):
+                    continue
+
+                suffix = normalized[len(family_name):].lstrip('_')
+                if not suffix:
+                    return _cap_variant(factory, a_star, learnable=False)
+
+                if suffix in {'1_fixed', 'a1_fixed'}:
+                    return _cap_variant(factory, 1.0, learnable=False)
+                if suffix in {'1_learnable', 'a1_learnable'}:
+                    return _cap_variant(factory, 1.0, learnable=True)
+                if suffix in {'astar_fixed', 'a_star_fixed'}:
+                    return _cap_variant(factory, a_star, learnable=False)
+                if suffix in {'astar_learnable', 'a_star_learnable'}:
+                    return _cap_variant(factory, a_star, learnable=True)
+
+            return None
+
+        # 1. Compatibility a-regime variants
         extended_set = get_extended_astar_activations()
         for name, module in extended_set.items():
             if self.activation.lower() == name.lower():
                 return module
-            
+
         # 2. Check Standard Baselines
         baselines = get_control_activations()
         for name, module in baselines.items():
             if self.activation.lower() == name.lower():
                 return module
-            
+
         # 3. Minimal compatibility aliases for canonical names
         activation = self.activation.lower()
         if activation == 'relu':
@@ -211,18 +260,55 @@ class ResNet20Experiment(DomainExperiment):
             return nn.GELU()
         elif activation in ['silu', 'swish']:
             return nn.SiLU()
-        elif activation in ['parametric_tanh_softcap', 'parametrictanhsoftcap', 'softcap']:
-            from softcap.activations import SoftCap
-            return SoftCap()
-        elif activation in ['parametricsmoothnotchtanhsoftcapv2', 'swishcap']:
-            from softcap.activations import SwishCap
-            return SwishCap()
-        elif activation in ['parametricquinticnotchtanhsoftcap', 'sparsecap']:
-            from softcap.activations import SparseCap
-            return SparseCap()
-            
+        elif activation in [
+            'parametric_tanh_softcap',
+            'parametrictanhsoftcap',
+            'softcap',
+            'softcap_1_fixed',
+            'softcap_1_learnable',
+            'softcap_astar_fixed',
+            'softcap_astar_learnable',
+            'tanhsoftcap_1_fixed',
+            'tanhsoftcap_1_learnable',
+            'tanhsoftcap_astar_fixed',
+            'tanhsoftcap_astar_learnable',
+        ]:
+            variant = _maybe_named_cap_variant(activation)
+            if variant is not None:
+                return variant
+        elif activation in [
+            'parametricsmoothnotchtanhsoftcapv2',
+            'swishcap',
+            'swishcap_1_fixed',
+            'swishcap_1_learnable',
+            'swishcap_astar_fixed',
+            'swishcap_astar_learnable',
+            'smoothnotchv2_1_fixed',
+            'smoothnotchv2_1_learnable',
+            'smoothnotchv2_astar_fixed',
+            'smoothnotchv2_astar_learnable',
+        ]:
+            variant = _maybe_named_cap_variant(activation)
+            if variant is not None:
+                return variant
+        elif activation in [
+            'parametricquinticnotchtanhsoftcap',
+            'sparsecap',
+            'sparsecap_1_fixed',
+            'sparsecap_1_learnable',
+            'sparsecap_astar_fixed',
+            'sparsecap_astar_learnable',
+            'quinticnotch_1_fixed',
+            'quinticnotch_1_learnable',
+            'quinticnotch_astar_fixed',
+            'quinticnotch_astar_learnable',
+        ]:
+            variant = _maybe_named_cap_variant(activation)
+            if variant is not None:
+                return variant
+
         raise ValueError(f"Unsupported activation: {self.activation}")
-    
+
     def create_dataloaders(
         self,
         data_dir: str = "data/cifar100",
@@ -232,13 +318,13 @@ class ResNet20Experiment(DomainExperiment):
     ) -> Tuple[DataLoader, DataLoader, DataLoader]:
         """
         Create data loaders for CIFAR-100.
-        
+
         Args:
             data_dir: Directory to store the dataset
             val_split: Fraction of training data to use for validation
             num_workers: Number of worker processes for data loading
             **kwargs: Additional arguments for DataLoader
-            
+
         Returns:
             Tuple of (train_loader, val_loader, test_loader)
         """
@@ -249,12 +335,12 @@ class ResNet20Experiment(DomainExperiment):
             transforms.ToTensor(),
             transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
         ])
-        
+
         transform_test = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
         ])
-        
+
         # Load datasets
         train_val_dataset = torchvision.datasets.CIFAR100(
             root=data_dir,
@@ -262,23 +348,23 @@ class ResNet20Experiment(DomainExperiment):
             download=True,
             transform=transform_train
         )
-        
+
         test_dataset = torchvision.datasets.CIFAR100(
             root=data_dir,
             train=False,
             download=True,
             transform=transform_test
         )
-        
+
         # Split training set into train and validation
         val_size = int(len(train_val_dataset) * val_split)
         train_size = len(train_val_dataset) - val_size
         train_dataset, val_dataset = random_split(
             train_val_dataset,
             [train_size, val_size],
-            generator=torch.Generator().manual_seed(42)
+            generator=torch.Generator().manual_seed(self.seed)
         )
-        
+
         # Apply test transform to validation set
         val_dataset.dataset = torchvision.datasets.CIFAR100(
             root=data_dir,
@@ -286,7 +372,7 @@ class ResNet20Experiment(DomainExperiment):
             download=False,
             transform=transform_test
         )
-        
+
         # Use plain DataLoader here to avoid platform-specific worker/socket issues.
         train_loader = DataLoader(
             train_dataset,
@@ -311,34 +397,36 @@ class ResNet20Experiment(DomainExperiment):
             num_workers=0,
             pin_memory=False,
         )
-        
+
         self.logger.info(f"Created CIFAR-100 data loaders: "
                         f"train={len(train_dataset)}, val={len(val_dataset)}, test={len(test_dataset)}")
-        
+
         return train_loader, val_loader, test_loader
-    
+
     def train(
-        self, 
-        train_loader: DataLoader, 
+        self,
+        train_loader: DataLoader,
         val_loader: DataLoader,
         device: str = "cuda",
+        checkpoint_epochs: Optional[List[int]] = None,
+        checkpoint_dir: Optional[Path] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
         Train the model on the CIFAR-100 dataset.
-        
+
         Args:
             train_loader: Training data loader
-            val_loader: Validation data loader  
+            val_loader: Validation data loader
             device: Device to use for training
             **kwargs: Additional training parameters
-            
+
         Returns:
             Dictionary containing training results and metrics
         """
         model = self.create_model()
         model = model.to(device)
-        
+
         # Use SGD with momentum for ResNet (standard practice)
         optimizer = torch.optim.SGD(
             model.parameters(),
@@ -347,16 +435,16 @@ class ResNet20Experiment(DomainExperiment):
             weight_decay=1e-4,
             nesterov=True
         )
-        
+
         # Learning rate schedule (standard for CIFAR)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer, 
-            milestones=[50, 75], 
+            optimizer,
+            milestones=[50, 75],
             gamma=0.1
         )
-        
+
         criterion = nn.CrossEntropyLoss()
-        
+
         # Training history
         history = {
             'train_loss': [],
@@ -365,83 +453,97 @@ class ResNet20Experiment(DomainExperiment):
             'val_acc': [],
             'lr': []
         }
-        
+
         best_val_acc = 0.0
         best_model_state = None
-        
+        checkpoint_epochs = sorted(set(int(e) for e in (checkpoint_epochs or [])))
+        if checkpoint_dir is not None:
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
         self.logger.info(f"Starting training for {self.num_epochs} epochs")
-        
+
         for epoch in range(self.num_epochs):
             # Training phase
             model.train()
             train_loss = 0.0
             train_correct = 0
             train_total = 0
-            
+
             for batch_idx, (data, target) in enumerate(train_loader):
                 data, target = data.to(device), target.to(device)
-                
+
                 optimizer.zero_grad()
                 output = model(data)
                 loss = criterion(output, target)
                 loss.backward()
                 optimizer.step()
-                
+
                 train_loss += loss.item()
                 _, predicted = output.max(1)
                 train_total += target.size(0)
                 train_correct += predicted.eq(target).sum().item()
-                
+
                 if batch_idx % 100 == 0:
                     self.logger.debug(f'Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}')
-            
+
             # Validation phase
             model.eval()
             val_loss = 0.0
             val_correct = 0
             val_total = 0
-            
+
             with torch.no_grad():
                 for data, target in val_loader:
                     data, target = data.to(device), target.to(device)
                     output = model(data)
                     loss = criterion(output, target)
-                    
+
                     val_loss += loss.item()
                     _, predicted = output.max(1)
                     val_total += target.size(0)
                     val_correct += predicted.eq(target).sum().item()
-            
+
             # Calculate metrics
             train_loss /= len(train_loader)
             train_acc = 100. * train_correct / train_total
             val_loss /= len(val_loader)
             val_acc = 100. * val_correct / val_total
-            
+
             # Update history
             history['train_loss'].append(train_loss)
             history['train_acc'].append(train_acc)
             history['val_loss'].append(val_loss)
             history['val_acc'].append(val_acc)
             history['lr'].append(optimizer.param_groups[0]['lr'])
-            
+
             # Save best model
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 best_model_state = model.state_dict().copy()
-            
+
+            epoch_num = epoch + 1
+            if checkpoint_dir is not None and epoch_num in checkpoint_epochs:
+                checkpoint_path = checkpoint_dir / f'checkpoint_epoch_{epoch_num:03d}.pt'
+                # Save a plain CPU state_dict so the telemetry loader can consume it directly.
+                state_dict = {
+                    key: value.detach().cpu()
+                    for key, value in model.state_dict().items()
+                }
+                torch.save(state_dict, checkpoint_path)
+                self.logger.info(f"Saved checkpoint: {checkpoint_path}")
+
             # Step scheduler
             scheduler.step()
-            
+
             # Log progress
             if epoch % 10 == 0 or epoch == self.num_epochs - 1:
                 self.logger.info(f'Epoch {epoch}: Train Acc: {train_acc:.2f}%, '
                                f'Val Acc: {val_acc:.2f}%, LR: {optimizer.param_groups[0]["lr"]:.6f}')
-        
+
         # Load best model
         if best_model_state is not None:
             model.load_state_dict(best_model_state)
-        
+
         results = {
             'model': model,
             'history': history,
@@ -455,28 +557,30 @@ class ResNet20Experiment(DomainExperiment):
                 'epochs': self.num_epochs,
                 'optimizer': 'SGD',
                 'scheduler': 'MultiStepLR',
-                'use_batch_norm': self.use_batch_norm
+                'use_batch_norm': self.use_batch_norm,
+                'seed': self.seed,
+                'checkpoint_epochs': checkpoint_epochs,
             }
         }
-        
+
         self.logger.info(f"Training completed. Best validation accuracy: {best_val_acc:.2f}%")
-        
+
         return results
-    
+
     def evaluate(
-        self, 
+        self,
         model: nn.Module,
         test_loader: DataLoader,
         device: str = "cuda"
     ) -> Dict[str, float]:
         """
         Evaluate the model on test data.
-        
+
         Args:
             model: Trained model
             test_loader: Test data loader
             device: Device to use for evaluation
-            
+
         Returns:
             Dictionary containing evaluation metrics
         """
@@ -484,31 +588,31 @@ class ResNet20Experiment(DomainExperiment):
         test_loss = 0.0
         test_correct = 0
         test_total = 0
-        
+
         criterion = nn.CrossEntropyLoss()
-        
+
         with torch.no_grad():
             for data, target in test_loader:
                 data, target = data.to(device), target.to(device)
                 output = model(data)
                 loss = criterion(output, target)
-                
+
                 test_loss += loss.item()
                 _, predicted = output.max(1)
                 test_total += target.size(0)
                 test_correct += predicted.eq(target).sum().item()
-        
+
         test_loss /= len(test_loader)
         test_acc = 100. * test_correct / test_total
-        
+
         results = {
             'test_loss': test_loss,
             'test_accuracy': test_acc,
             'total_samples': test_total
         }
-        
+
         self.logger.info(f"Test evaluation completed. Accuracy: {test_acc:.2f}%")
-        
+
         return results
 
 
@@ -522,113 +626,127 @@ def run_resnet20_comparison(
 ) -> Dict[str, Any]:
     """
     Run ResNet-20 comparison across multiple activation functions.
-    
+
     Args:
         activations: List of activation function names to test
         output_dir: Output directory for results
         device: Device to use for training
         with_batch_norm: Whether to test with batch normalization
-        without_batch_norm: Whether to test without batch normalization  
+        without_batch_norm: Whether to test without batch normalization
         **kwargs: Additional arguments for ResNet20Experiment
-        
+
     Returns:
         Dictionary containing all experimental results
     """
     results = {}
-    
+
     configurations = []
     if with_batch_norm:
         configurations.append(('with_bn', True))
     if without_batch_norm:
         configurations.append(('without_bn', False))
-    
+
     for config_name, use_bn in configurations:
         results[config_name] = {}
-        
+
         for activation in activations:
             print(f"\n🔄 Training ResNet-20 with {activation} ({config_name})...")
-            
+
             experiment = ResNet20Experiment(
                 name=f"resnet20_{activation}_{config_name}",
                 activation=activation,
                 use_batch_norm=use_bn,
                 **kwargs
             )
-            
+
             # Create data loaders
             train_loader, val_loader, test_loader = experiment.create_dataloaders()
-            
+
             # Train model
             training_results = experiment.train(
                 train_loader, val_loader, device=device
             )
-            
+
             # Test evaluation
             test_results = experiment.evaluate(
                 training_results['model'], test_loader, device=device
             )
-            
+
             # Combine results
             results[config_name][activation] = {
                 'training': training_results,
                 'testing': test_results,
                 'experiment_config': experiment.metadata
             }
-            
+
             print(f"   ✓ Best Val Accuracy: {training_results['best_val_accuracy']:.2f}%")
             print(f"   ✓ Test Accuracy: {test_results['test_accuracy']:.2f}%")
-    
+
     return results
 
 
 if __name__ == "__main__":
     import argparse
     import json
-    
-    parser = argparse.ArgumentParser(description='ResNet-20 CIFAR-100 Experiment (Thrust 3)')
-    
+
+    parser = argparse.ArgumentParser(description='ResNet-20 CIFAR-100 Experiment')
+
     # Activation selection
     act_group = parser.add_mutually_exclusive_group(required=True)
     act_group.add_argument('--activation', type=str, help='Single activation to test')
-    act_group.add_argument('--all-activations', action='store_true', 
-                          help='Run standard experimental set (Parametric* + controls)')
+    act_group.add_argument('--all-activations', action='store_true',
+                          help='Run the canonical paper activation suite')
     act_group.add_argument('--controls-only', action='store_true',
                           help='Run only controls (ReLU, Tanh, GELU, SiLU)')
-    act_group.add_argument('--extended-astar', action='store_true', 
-                          help='Run full comprehensive Extended Astar set')
-    
+    act_group.add_argument('--extended-astar', action='store_true',
+                          help='Run compatibility fixed/learnable a-regime variants')
+
     # Hyperparameters
     parser.add_argument('--epochs', type=int, default=100, help='Training epochs (default: 100)')
     parser.add_argument('--batch-size', type=int, default=128, help='Batch size (default: 128)')
     parser.add_argument('--lr', type=float, default=0.1, help='Learning rate (default: 0.1)')
+    parser.add_argument('--seed', type=int, default=0, help='Global RNG seed for the run (default: 0)')
     parser.add_argument('--extreme-lr', action='store_true', help='Use extreme LR=0.3 stress test')
-    
+    parser.add_argument(
+        '--checkpoint-epoch',
+        type=int,
+        nargs='*',
+        default=[],
+        help='Epoch numbers to save plain state_dict checkpoints for telemetry (e.g. 30 100 200)',
+    )
+    parser.add_argument(
+        '--checkpoint-dir',
+        type=str,
+        default=None,
+        help='Root directory for saved telemetry checkpoints; checkpoints are stored under <root>/<activation>/seed<seed>/',
+    )
+
     # Output and resume
-    parser.add_argument('--output-dir', type=str, default='Thrust_3/resnet20_cifar100',
-                       help='Output directory (default: Thrust_3/resnet20_cifar100)')
+    parser.add_argument('--output-dir', type=str, default='runs/resnet20_cifar100',
+                       help='Output directory (default: runs/resnet20_cifar100)')
     parser.add_argument('--resume', dest='resume', action='store_true',
                        help='Resume by skipping completed activations (default: on)')
     parser.add_argument('--no-resume', dest='resume', action='store_false')
     parser.set_defaults(resume=True)
     parser.add_argument('--force', action='store_true', help='Force recompute even if exists')
-    
+
     # BatchNorm A/B testing
     parser.add_argument('--no-batch-norm', action='store_true', help='Disable batch normalization')
-    
+
     # Quick mode
     parser.add_argument('--quick', action='store_true', help='Quick test (10 epochs)')
-    
+
     args = parser.parse_args()
-    
+
     if args.quick:
         args.epochs = 10
-    
+
     if args.extreme_lr:
         args.lr = 0.3
-    
+
     # Get activation list
     from softcap.control_activations import get_control_activations, get_standard_experimental_set
-    
+
     if args.extended_astar:
         from softcap.control_activations import get_extended_astar_activations
         activation_dict = get_extended_astar_activations()
@@ -645,31 +763,49 @@ if __name__ == "__main__":
     else:
         activations = [args.activation]
         print(f"Running single activation: {args.activation}")
-    
+
     # Setup output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
     print(f"Epochs: {args.epochs}, LR: {args.lr}, Batch Size: {args.batch_size}")
-    
+    print(f"Seed: {args.seed}")
+    if args.checkpoint_epoch:
+        print(f"Checkpoint epochs: {sorted(set(args.checkpoint_epoch))}")
+
     all_results = {}
-    
+
     for activation in activations:
         result_path = output_dir / f"{activation}_results.json"
-        
+        checkpoint_root = Path(args.checkpoint_dir) if args.checkpoint_dir else output_dir / 'checkpoints'
+        activation_checkpoint_dir = checkpoint_root / activation / f'seed{args.seed}'
+        missing_checkpoints = []
+        if args.checkpoint_epoch:
+            missing_checkpoints = [
+                epoch
+                for epoch in sorted(set(args.checkpoint_epoch))
+                if not (activation_checkpoint_dir / f'checkpoint_epoch_{epoch:03d}.pt').exists()
+            ]
+
         # Resume support
-        if args.resume and not args.force and result_path.exists():
+        if args.resume and not args.force and result_path.exists() and not missing_checkpoints:
             print(f"\n✓ Skipping {activation} (already exists, use --force to recompute)")
             with open(result_path, 'r') as f:
                 all_results[activation] = json.load(f)
             continue
-        
+        if args.resume and not args.force and result_path.exists() and missing_checkpoints:
+            print(
+                f"\n↻ Re-running {activation} because telemetry checkpoints are missing for epochs {missing_checkpoints}."
+            )
+
         print(f"\n{'='*60}")
         print(f"Training ResNet-20 with {activation}")
         print(f"{'='*60}")
-        
+
+        _set_global_seed(args.seed)
+
         experiment = ResNet20Experiment(
             name=f"resnet20_{activation}",
             activation=activation,
@@ -677,17 +813,24 @@ if __name__ == "__main__":
             learning_rate=args.lr,
             num_epochs=args.epochs,
             use_batch_norm=not args.no_batch_norm,
+            seed=args.seed,
         )
-        
+
         # Create data loaders
         train_loader, val_loader, test_loader = experiment.create_dataloaders()
-        
+
         # Train model
-        training_results = experiment.train(train_loader, val_loader, device=device)
-        
+        training_results = experiment.train(
+            train_loader,
+            val_loader,
+            device=device,
+            checkpoint_epochs=args.checkpoint_epoch,
+            checkpoint_dir=activation_checkpoint_dir if args.checkpoint_epoch else None,
+        )
+
         # Test evaluation
         test_results = experiment.evaluate(training_results['model'], test_loader, device=device)
-        
+
         # Save checkpoint
         checkpoint = {
             'activation': activation,
@@ -699,22 +842,26 @@ if __name__ == "__main__":
                 'lr': args.lr,
                 'batch_size': args.batch_size,
                 'use_batch_norm': not args.no_batch_norm,
+                'seed': args.seed,
+                'checkpoint_epochs': sorted(set(args.checkpoint_epoch)),
             },
             'training_history': {
                 'train_loss': training_results['history']['train_loss'],
+                'train_acc': training_results['history']['train_acc'],
+                'val_loss': training_results['history']['val_loss'],
                 'val_acc': training_results['history']['val_acc'],
             }
         }
-        
+
         with open(result_path, 'w') as f:
             json.dump(checkpoint, f, indent=2)
-        
+
         all_results[activation] = checkpoint
-        
+
         print(f"   ✓ Best Val: {training_results['best_val_accuracy']:.2f}%")
         print(f"   ✓ Test Acc: {test_results['test_accuracy']:.2f}%")
         print(f"   ✓ Saved to: {result_path}")
-    
+
     # Generate summary
     print(f"\n{'='*80}")
     print("RESNET-20 CIFAR-100 SUMMARY")
@@ -723,7 +870,7 @@ if __name__ == "__main__":
     print(f"{'-'*80}")
     for act_name, result in all_results.items():
         print(f"{act_name:<35} {result['best_val_accuracy']:>11.2f}% {result['test_accuracy']:>11.2f}%")
-    
+
     # Save overall summary
     summary_path = output_dir / 'summary.json'
     with open(summary_path, 'w') as f:
