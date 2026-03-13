@@ -115,4 +115,4 @@ The full paper is also available as [main.pdf](main.pdf).
 
 ## License
 
-Apache 2.0. See [LICENSE`.
+Apache 2.0. See [LICENSE](LICENSE).
