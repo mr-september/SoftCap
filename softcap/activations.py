@@ -1,17 +1,3 @@
-# Copyright 2026 Larry Cai and Jie Tang
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """SoftCap activation functions.
 
 Canonical public names (v1 publication):
@@ -227,7 +213,22 @@ class GELUWithMetrics(BaseActivation):
         return F.gelu(x)
 
     def derivative(self, x: torch.Tensor) -> torch.Tensor:
-        return 0.5 * (1 + torch.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * x ** 3)))
+        # Match PyTorch's GELU implementations.
+        approximate = getattr(self, "approximate", "none")
+        if approximate == "tanh":
+            # gelu(x) = 0.5*x*(1 + tanh( sqrt(2/pi) * (x + 0.044715*x^3) ))
+            c = math.sqrt(2.0 / math.pi)
+            u = c * (x + 0.044715 * x**3)
+            t = torch.tanh(u)
+            du_dx = c * (1.0 + 3.0 * 0.044715 * x**2)
+            return 0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * du_dx
+
+        # Exact GELU: gelu(x) = x * Phi(x), Phi = Normal CDF.
+        # d/dx gelu(x) = Phi(x) + x * phi(x), phi = Normal PDF.
+        inv_sqrt2 = 1.0 / math.sqrt(2.0)
+        phi = torch.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+        Phi = 0.5 * (1.0 + torch.erf(x * inv_sqrt2))
+        return Phi + x * phi
 
 
 class SiLUWithMetrics(BaseActivation):
@@ -243,7 +244,35 @@ class SiLUWithMetrics(BaseActivation):
         return s * (1 + x * (1 - s))
 
 
+class ReLU6WithMetrics(BaseActivation):
+    def __init__(self) -> None:
+        super().__init__()
+        self.name = "ReLU6"
+
+    def activation_function(self, x: torch.Tensor) -> torch.Tensor:
+        return F.relu6(x)
+
+    def derivative(self, x: torch.Tensor) -> torch.Tensor:
+        return ((x > 0) & (x < 6)).float()
+
+
+class HardTanhWithMetrics(BaseActivation):
+    def __init__(self, min_val: float = -1.0, max_val: float = 1.0) -> None:
+        super().__init__()
+        self.name = "HardTanh"
+        self.min_val = float(min_val)
+        self.max_val = float(max_val)
+
+    def activation_function(self, x: torch.Tensor) -> torch.Tensor:
+        return F.hardtanh(x, min_val=self.min_val, max_val=self.max_val)
+
+    def derivative(self, x: torch.Tensor) -> torch.Tensor:
+        return ((x > self.min_val) & (x < self.max_val)).float()
+
+
 def get_default_activations() -> Dict[str, nn.Module]:
+    """Return the release-facing default activation set."""
+
     return {
         "SoftCap": SoftCap(),
         "SwishCap": SwishCap(),
@@ -253,6 +282,19 @@ def get_default_activations() -> Dict[str, nn.Module]:
         "GELU": GELUWithMetrics(),
         "SiLU": SiLUWithMetrics(),
     }
+
+
+def get_full_default_activations() -> Dict[str, nn.Module]:
+    """Return the full built-in activation catalog, including appendix controls."""
+
+    activations = get_default_activations()
+    activations.update(
+        {
+            "ReLU6": ReLU6WithMetrics(),
+            "HardTanh": HardTanhWithMetrics(),
+        }
+    )
+    return activations
 
 
 def get_baseline_activations() -> Dict[str, nn.Module]:
@@ -325,11 +367,14 @@ __all__ = [
     "SparseCap",
     # Controls
     "ReLUWithMetrics",
+    "ReLU6WithMetrics",
     "TanhWithMetrics",
+    "HardTanhWithMetrics",
     "GELUWithMetrics",
     "SiLUWithMetrics",
     # Helpers
     "get_default_activations",
+    "get_full_default_activations",
     "get_baseline_activations",
     "get_modern_activations",
     "analyze_activation_properties",

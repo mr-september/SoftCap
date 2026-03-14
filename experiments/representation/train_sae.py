@@ -51,7 +51,7 @@ from softcap.activations import (
     SwishCap,
     SparseCap,
 )
-from mechanistic_interpretability.sparse_coding.sae import SparseAutoencoder, TopKActivation
+from experiments.representation.sae import SparseAutoencoder, TopKActivation
 
 def generate_mock_activations(n_samples=10000, d_model=256, sparsity=0.8, seed=42):
     """Generate synthetic 'neuron activations' with some structure."""
@@ -484,4 +484,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

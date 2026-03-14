@@ -1,17 +1,3 @@
-# Copyright 2026 Larry Cai and Jie Tang
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """
 Muon Optimizer Experiment Runner
 
@@ -20,24 +6,26 @@ Tests whether bounded activations (SoftCap) can substitute for QK-Clip by
 naturally constraining pre-softmax attention scores.
 
 Configuration Matrix (full sweep mode):
-- Activations: 5 (controls: ReLU, GELU; SoftCap: SoftCap, SwishCap, SparseCap)
+- Activations: 5 release-facing defaults (controls: ReLU, GELU; SoftCap: SoftCap, SwishCap, SparseCap)
+  plus optional appendix controls (ReLU6, HardTanh)
 - Inits: 4 (kaiming, orthogonal, xavier, softcap_optimal)
 - a-Policies: 4 (a=1, a=a*, a=2.5, learnable)
 - LR: 0.02 (Muon canonical), WD: 0.01
 - Seeds: 2
 
-Verification mode: 5 configs × 2 seeds = 10 runs (see README.md for config table).
+Verification mode runs the canonical paper subset by default; appendix-only
+bounded controls remain opt-in.
 
 Usage:
-    # Verification run (5 configs × 2 seeds)
+    # Verification run (targeted subset)
     python scripts/experiments/run_muon.py --verification --epochs 30 --seeds 2
-    
+
     # Quick sanity check
     python scripts/experiments/run_muon.py --quick --epochs 3 --seeds 1
-    
+
     # Resume from checkpoint
     python scripts/experiments/run_muon.py --resume
-    
+
     # SoftCap variants only
     python scripts/experiments/run_muon.py --softcap-only
 
@@ -105,18 +93,18 @@ DEFAULT_CONFIG = {
     'mlp_ratio': 4.0,
     'dropout': 0.1,
     'drop_path': 0.1,
-    
+
     # Training
     'epochs': 30,  # Preliminary: reduced epochs
     'batch_size': 128,
     'warmup_epochs': 5,
     'patience': 10,
-    
+
     # Muon-specific
     'muon_momentum': 0.95,
     'ns_steps': 5,  # Newton-Schulz steps (optimal from literature)
     'momentum_warmup_steps': 300,
-    
+
     # Data
     'data_root': './data',
 }
@@ -125,7 +113,7 @@ DEFAULT_CONFIG = {
 def get_activation_configs() -> List[Dict[str, Any]]:
     """
     Get activation configurations to sweep.
-    
+
     Returns list of dicts with:
     - name: str
     - factory: callable(a) -> nn.Module
@@ -165,8 +153,53 @@ def get_activation_configs() -> List[Dict[str, Any]]:
             'is_softcap': True,
             'a_star': 2.14,
         },
+        # Appendix-only bounded controls kept available for targeted audits.
+        {
+            'name': 'ReLU6',
+            'factory': lambda a: nn.ReLU6(),
+            'is_softcap': False,
+            'a_star': 1.0,  # Not applicable
+        },
+        {
+            'name': 'HardTanh',
+            'factory': lambda a: nn.Hardtanh(min_val=-1.0, max_val=1.0),
+            'is_softcap': False,
+            'a_star': 1.0,  # Not applicable
+        },
     ]
     return configs
+
+
+def get_verification_specs() -> Dict[str, Dict[str, Any]]:
+    """Return the canonical verification subset.
+
+    The release-facing verification path stays aligned with the main paper
+    suite. Appendix-only bounded controls remain available via
+    ``--only-activations`` but are not enabled by default.
+    """
+
+    return {
+        'SoftCap': {'init': 'softcap_optimal', 'policy': 'a=a*', 'default_enabled': True},
+        'SwishCap': {'init': 'softcap_optimal', 'policy': 'a=a*', 'default_enabled': True},
+        'SparseCap': {'init': 'softcap_optimal', 'policy': 'a=a*', 'default_enabled': True},
+        'ReLU': {'init': 'kaiming', 'policy': 'a=1.0', 'default_enabled': True},
+        'GELU': {'init': 'kaiming', 'policy': 'a=1.0', 'default_enabled': True},
+        'ReLU6': {'init': 'kaiming', 'policy': 'a=1.0', 'default_enabled': False},
+        'HardTanh': {'init': 'kaiming', 'policy': 'a=1.0', 'default_enabled': False},
+    }
+
+
+def _canonicalize_activation_name(name: Optional[str]) -> Optional[str]:
+    """Map legacy artifact labels onto the canonical activation config names."""
+    if name is None:
+        return None
+
+    aliases = {
+        'ParametricTanhSoftCap': 'SoftCap',
+        'ParametricSmoothNotchTanhSoftCapV2': 'SwishCap',
+        'ParametricQuinticNotchTanhSoftCap': 'SparseCap',
+    }
+    return aliases.get(name, name)
 
 
 def get_init_configs() -> List[Dict[str, Any]]:
@@ -191,7 +224,7 @@ def get_a_policies() -> List[Dict[str, Any]]:
 
 def get_lr_configs() -> List[float]:
     """Get learning rates to sweep.
-    
+
     Using LR=0.02 only (Muon paper canonical value).
     Muon optimizer uses higher LR than Adam/AdamW due to orthogonalization.
     """
@@ -200,7 +233,7 @@ def get_lr_configs() -> List[float]:
 
 def get_wd_configs() -> List[float]:
     """Get weight decay values to sweep.
-    
+
     Using WD=0.01 only (standard AdamW value).
     WD is orthogonal to attention stability (core hypothesis).
     """
@@ -214,6 +247,50 @@ def _fmt_float_tag(x: Optional[float]) -> str:
     s = f"{x:.6g}"
     return s.replace('-', 'm').replace('.', 'p')
 
+def _parse_qkv_targets(qkv_targets: str) -> Tuple[str, ...]:
+    raw = str(qkv_targets or "").strip().lower()
+    chars = [c for c in raw if c in {"q", "k", "v"}]
+    if not chars:
+        return ("q", "k")
+    out = []
+    for c in ("q", "k", "v"):
+        if c in chars and c not in out:
+            out.append(c)
+    return tuple(out)
+
+def _parse_csv_names(raw: Optional[str]) -> Optional[List[str]]:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    parts = [p.strip() for p in s.split(",")]
+    out = [p for p in parts if p]
+    return out or None
+
+
+def _filter_named_configs(
+    configs: List[Dict[str, Any]],
+    *,
+    only_names: Optional[List[str]],
+    kind: str,
+) -> List[Dict[str, Any]]:
+    if not only_names:
+        return configs
+    want = {n.strip().lower() for n in only_names if str(n).strip()}
+    if not want:
+        return configs
+    by_name = {str(c.get("name", "")).strip().lower(): c for c in configs}
+    missing = sorted([n for n in want if n not in by_name])
+    if missing:
+        available = sorted([str(c.get("name", "")).strip() for c in configs if str(c.get("name", "")).strip()])
+        raise ValueError(
+            f"Unknown {kind} name(s): {missing}. Available: {available}"
+        )
+    # Preserve canonical order in configs.
+    keep = [c for c in configs if str(c.get("name", "")).strip().lower() in want]
+    return keep
+
 
 # ============================================================================
 # DATA LOADING
@@ -221,7 +298,7 @@ def _fmt_float_tag(x: Optional[float]) -> str:
 
 def setup_data(config: Dict[str, Any], device: str) -> Tuple[DataLoader, DataLoader]:
     """Setup CIFAR-100 data loaders."""
-    
+
     # Training transforms with augmentation
     train_transform = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
@@ -232,7 +309,7 @@ def setup_data(config: Dict[str, Any], device: str) -> Tuple[DataLoader, DataLoa
             std=[0.2675, 0.2565, 0.2761]
         ),
     ])
-    
+
     # Validation transforms (no augmentation)
     val_transform = transforms.Compose([
         transforms.ToTensor(),
@@ -241,7 +318,7 @@ def setup_data(config: Dict[str, Any], device: str) -> Tuple[DataLoader, DataLoa
             std=[0.2675, 0.2565, 0.2761]
         ),
     ])
-    
+
     # Load datasets
     train_dataset = torchvision.datasets.CIFAR100(
         root=config['data_root'],
@@ -249,19 +326,19 @@ def setup_data(config: Dict[str, Any], device: str) -> Tuple[DataLoader, DataLoa
         download=True,
         transform=train_transform
     )
-    
+
     val_dataset = torchvision.datasets.CIFAR100(
         root=config['data_root'],
         train=False,
         download=True,
         transform=val_transform
     )
-    
+
     # DataLoaders with CUDA acceleration
     use_cuda = torch.cuda.is_available()
     # WSL/DrvFS can fail on multiprocessing socket listeners; force single-worker IO.
     nw = 0
-    
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=config['batch_size'],
@@ -271,7 +348,7 @@ def setup_data(config: Dict[str, Any], device: str) -> Tuple[DataLoader, DataLoa
         persistent_workers=nw > 0,
         drop_last=True,
     )
-    
+
     val_loader = DataLoader(
         val_dataset,
         batch_size=config['batch_size'],
@@ -280,7 +357,7 @@ def setup_data(config: Dict[str, Any], device: str) -> Tuple[DataLoader, DataLoa
         pin_memory=False,
         persistent_workers=nw > 0,
     )
-    
+
     return train_loader, val_loader
 
 
@@ -296,22 +373,24 @@ def create_model(
     init_config: Dict[str, Any],
     device: str,
     qk_score_clamp: Optional[float] = None,
+    qkv_activation_targets: Tuple[str, ...] = ("q", "k"),
+    norm_mode: str = "layernorm",
 ) -> ViTMuonResearch:
     """Create ViT model with specified configuration."""
-    
+
     # Determine 'a' value
     if a_policy['a_value'] == 'a_star':
         a_value = activation_config['a_star']
     else:
         a_value = a_policy['a_value']
-    
+
     # Create activation for Q/K projections
     qk_activation = activation_config['factory'](a_value)
-    
+
     # Freeze or unfreeze the 'a' parameter based on policy
     if hasattr(qk_activation, 'a'):
         qk_activation.a.requires_grad_(a_policy['learnable'])
-    
+
     # Create model
     model = ViTMuonResearch(
         img_size=config['img_size'],
@@ -323,15 +402,17 @@ def create_model(
         mlp_ratio=config['mlp_ratio'],
         mlp_activation=nn.GELU(),  # MLP uses GELU (standard)
         qk_activation=qk_activation,  # Q/K uses our test activation
+        qkv_activation_targets=qkv_activation_targets,
         dropout=config['dropout'],
         drop_path=config['drop_path'],
         track_attention_stats=True,
         qk_clip_threshold=qk_score_clamp,
+        norm_mode=norm_mode,
     )
-    
+
     # Apply initialization
     apply_initialization(model, init_config['method'], activation_config['name'])
-    
+
     model = model.to(device)
     return model
 
@@ -351,7 +432,7 @@ def train_epoch(
     epoch: int,
 ) -> Dict[str, float]:
     """Train for one epoch."""
-    
+
     model.train()
     total_loss = 0.0
     correct = 0
@@ -363,20 +444,20 @@ def train_epoch(
     layer_wise_qk_raw = {}  # Store lists of raw max QK per layer
     layer_wise_qk_post_clip = {}  # Store lists of post-clip max QK per layer
     layer_wise_clip_fraction = {}  # Store clip fraction per layer
-    
+
     criterion = nn.CrossEntropyLoss()
-    
+
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
-        
+
         # Zero gradients
         muon_opt.zero_grad()
         adamw_opt.zero_grad()
-        
+
         # Forward pass
         output = model(data)
         loss = criterion(output, target)
-        
+
         # Check for NaN/Inf
         if not torch.isfinite(loss):
             return {
@@ -387,10 +468,10 @@ def train_epoch(
                 'grad_norm': float('inf'),
                 'diverged': True,
             }
-        
+
         # Backward pass
         loss.backward()
-        
+
         # Record gradient norm BEFORE optimizer step
         total_norm = 0.0
         for p in model.parameters():
@@ -398,7 +479,7 @@ def train_epoch(
                 total_norm += p.grad.data.norm(2).item() ** 2
         total_norm = total_norm ** 0.5
         grad_norms.append(total_norm)
-        
+
         # Check for exploding gradients
         if total_norm > 1e6:
             return {
@@ -409,23 +490,23 @@ def train_epoch(
                 'grad_norm': total_norm,
                 'diverged': True,
             }
-        
+
         # Optimizer steps
         muon_opt.step()
         adamw_opt.step()
         scheduler.step()
-        
+
         # Track metrics
         total_loss += loss.item()
         pred = output.argmax(dim=1)
         correct += pred.eq(target).sum().item()
         total += target.size(0)
-        
+
         # Track max QK score (key stability metric)
         max_qk = model.get_max_qk_score()
         if not np.isnan(max_qk):
             max_qk_scores_raw.append(max_qk)
-            
+
         # Track layer-wise stats
         all_stats = model.get_all_attention_stats()
         for layer_name, stats in all_stats.items():
@@ -452,14 +533,14 @@ def train_epoch(
         ]
         if valid_layer_clip_fractions:
             clip_fractions.append(float(np.mean(valid_layer_clip_fractions)))
-    
+
     avg_loss = total_loss / len(train_loader)
     accuracy = 100.0 * correct / total
     avg_max_qk_raw = np.mean(max_qk_scores_raw) if max_qk_scores_raw else float('nan')
     avg_max_qk_post_clip = np.mean(max_qk_scores_post_clip) if max_qk_scores_post_clip else float('nan')
     avg_clip_fraction = np.mean(clip_fractions) if clip_fractions else float('nan')
     avg_grad_norm = np.mean(grad_norms) if grad_norms else float('nan')
-    
+
     # Compute layer-wise max QK (average over batches)
     layer_wise_avg_raw = {}
     if layer_wise_qk_raw:
@@ -475,7 +556,7 @@ def train_epoch(
     if layer_wise_clip_fraction:
         for layer_name, scores in layer_wise_clip_fraction.items():
             layer_wise_avg_clip_fraction[layer_name] = np.mean(scores) if scores else float('nan')
-            
+
     return {
         'loss': avg_loss,
         'accuracy': accuracy,
@@ -498,32 +579,32 @@ def validate(
     device: str,
 ) -> Dict[str, float]:
     """Validate model."""
-    
+
     model.eval()
     total_loss = 0.0
     correct = 0
     total = 0
-    
+
     criterion = nn.CrossEntropyLoss()
-    
+
     with torch.no_grad():
         for data, target in val_loader:
             data, target = data.to(device), target.to(device)
             output = model(data)
             loss = criterion(output, target)
-            
+
             if not torch.isfinite(loss):
                 return {
                     'loss': float('inf'),
                     'accuracy': 0.0,
                     'diverged': True,
                 }
-            
+
             total_loss += loss.item()
             pred = output.argmax(dim=1)
             correct += pred.eq(target).sum().item()
             total += target.size(0)
-    
+
     return {
         'loss': total_loss / len(val_loader),
         'accuracy': 100.0 * correct / total,
@@ -545,10 +626,15 @@ def generate_config_id(
     seed: int,
     epochs: int,
     qk_score_clamp: Optional[float] = None,
+    qkv_activation_targets: Tuple[str, ...] = ("q", "k"),
+    norm_mode: str = "layernorm",
 ) -> str:
     """Generate unique config ID for checkpointing."""
     clamp_tag = "none" if qk_score_clamp is None else f"{qk_score_clamp:.6g}"
-    key = f"{activation}_{init}_{a_policy}_lr{lr}_wd{wd}_seed{seed}_ep{epochs}_qkclamp{clamp_tag}"
+    targets = tuple(t for t in ("q", "k", "v") if str(t) in {str(x).lower() for x in qkv_activation_targets})
+    targets_tag = "" if targets == ("q", "k") else f"_qkv{''.join(targets)}"
+    norm_tag = str(norm_mode or "layernorm").strip().lower()
+    key = f"{activation}_{init}_{a_policy}_lr{lr}_wd{wd}_seed{seed}_ep{epochs}_qkclamp{clamp_tag}{targets_tag}_norm{norm_tag}"
     return hashlib.md5(key.encode()).hexdigest()[:12]
 
 
@@ -569,6 +655,8 @@ def run_single_experiment(
     output_dir: Path = None,
     resume: bool = False,
     qk_score_clamp: Optional[float] = None,
+    qkv_activation_targets: Tuple[str, ...] = ("q", "k"),
+    norm_mode: str = "layernorm",
 ) -> Dict[str, Any]:
     """Run a single experiment configuration."""
 
@@ -603,7 +691,7 @@ def run_single_experiment(
         hist.setdefault('divergence_epoch', None)
         hist.setdefault('stopped_at_epoch', None)
         return hist
-    
+
     # Initialize Checkpoint Manager
     ckpt_manager = None
     if output_dir is not None and config_id is not None:
@@ -615,13 +703,13 @@ def run_single_experiment(
             metric_mode='max',
             strategy='smart'
         )
-    
+
     # Set seed
     torch.manual_seed(seed)
     np.random.seed(seed)
     if device == 'cuda':
         torch.cuda.manual_seed_all(seed)
-    
+
     # Create model
     model = create_model(
         config,
@@ -630,8 +718,10 @@ def run_single_experiment(
         init_config,
         device,
         qk_score_clamp=qk_score_clamp,
+        qkv_activation_targets=qkv_activation_targets,
+        norm_mode=norm_mode,
     )
-    
+
     # Create optimizers
     # Muon requires specific parameter grouping (handled in create_muon_optimizer_groups)
     muon_opt, adamw_opt = create_muon_optimizer_groups(
@@ -643,7 +733,7 @@ def run_single_experiment(
         ns_steps=config['ns_steps'],
         warmup_steps=config['momentum_warmup_steps'],
     )
-    
+
     # Create scheduler
     # IMPORTANT: The scheduler depends on the TOTAL planned epochs, not the stop_at_epoch.
     # This allows resuming later with the correct decay curve.
@@ -654,7 +744,7 @@ def run_single_experiment(
         total_steps=total_steps,
         warmup_steps=config['warmup_epochs'] * len(train_loader),
     )
-    
+
     # Training history
     history = {
         'train_loss': [],
@@ -679,11 +769,12 @@ def run_single_experiment(
         'a_value': a_policy.get('value'),  # May be None for 'learnable'
         'seed': seed,
         'qk_score_clamp': qk_score_clamp,
+        'norm_mode': norm_mode,
     }
-    
+
     start_epoch = 0
     best_val_acc = 0.0
-    
+
     # Resume from checkpoint if available
     if resume and ckpt_manager is not None:
         checkpoint = ckpt_manager.load_checkpoint()
@@ -700,7 +791,7 @@ def run_single_experiment(
                 scheduler.current_step = checkpoint['scheduler_current_step']
             if 'muon_global_step' in checkpoint:
                 muon_opt.global_step = checkpoint['muon_global_step']
-            
+
             # Restore history
             if 'history' in checkpoint:
                 history = _ensure_history_schema_compatibility(checkpoint['history'])
@@ -709,14 +800,14 @@ def run_single_experiment(
                     best_val_acc = max(history['val_acc'])
             else:
                 start_epoch = checkpoint['epoch'] + 1
-    
+
     # Training loop
     for epoch in range(start_epoch, config['epochs']):
         # Check stop condition (Resumability logic)
         if stop_at_epoch is not None and epoch >= stop_at_epoch:
             print(f"    [INFO] Pausing at epoch {epoch} (requested stop_at_epoch={stop_at_epoch})")
             history['stopped_at_epoch'] = epoch
-            
+
             # Save checkpoint before stopping
             if ckpt_manager is not None:
                  ckpt_manager.save_checkpoint(
@@ -734,17 +825,17 @@ def run_single_experiment(
                      }
                  )
             break
-            
+
         # Train
         train_metrics = train_epoch(
             model, train_loader, muon_opt, adamw_opt, scheduler, device, config, epoch
         )
-        
+
         if train_metrics['diverged']:
             history['diverged'] = True
             history['divergence_epoch'] = epoch
             break
-        
+
         history['train_loss'].append(train_metrics['loss'])
         history['train_acc'].append(train_metrics['accuracy'])
         history['max_qk_score'].append(train_metrics['max_qk_score'])
@@ -756,22 +847,22 @@ def run_single_experiment(
         history['layer_wise_max_qk_raw'].append(train_metrics.get('layer_wise_max_qk_raw', {}))
         history['layer_wise_max_qk_post_clip'].append(train_metrics.get('layer_wise_max_qk_post_clip', {}))
         history['layer_wise_clip_fraction'].append(train_metrics.get('layer_wise_clip_fraction', {}))
-        
+
         # Validate
         val_metrics = validate(model, val_loader, device)
-        
+
         if val_metrics['diverged']:
             history['diverged'] = True
             history['divergence_epoch'] = epoch
             break
-        
+
         history['val_loss'].append(val_metrics['loss'])
         history['val_acc'].append(val_metrics['accuracy'])
-        
+
         # Track best
         if val_metrics['accuracy'] > best_val_acc:
             best_val_acc = val_metrics['accuracy']
-            
+
         # Logging
         print(f"    Ep {epoch+1}/{config['epochs']} | "
               f"Loss: {train_metrics['loss']:.4f} | "
@@ -779,7 +870,7 @@ def run_single_experiment(
               f"QK(raw/post): {train_metrics['max_qk_score_raw']:.2f}/{train_metrics['max_qk_score_post_clip']:.2f} | "
               f"ClipFrac: {train_metrics.get('clip_fraction', float('nan')):.4f} | "
               f"Grad: {train_metrics['grad_norm']:.2f}")
-              
+
         # Save checkpoint (manager's 'smart' strategy handles retention)
         if ckpt_manager is not None:
              ckpt_manager.save_checkpoint(
@@ -807,7 +898,7 @@ def run_single_experiment(
     history['mean_clip_fraction'] = np.mean(history['clip_fraction']) if history['clip_fraction'] else float('nan')
     history['max_clip_fraction'] = max(history['clip_fraction']) if history['clip_fraction'] else float('nan')
     history['max_recorded_grad'] = max(history['grad_norm']) if history['grad_norm'] else float('nan')
-    
+
     return history
 
 
@@ -817,10 +908,11 @@ def run_intervention_test(
     fraction: float = 0.01,
     scale: float = 5.0,
     qk_score_clamp: Optional[float] = None,
+    norm_mode: str = "layernorm",
 ):
     """
     Run intervention test on trained models.
-    
+
     Loads checkpoints from recent runs and evaluates with injected Q/K corruption.
     Tests hypothesis: If bounded activations prevent extremes architecturally,
     injecting extremes should degrade their performance.
@@ -828,20 +920,20 @@ def run_intervention_test(
     output_dir = Path(output_dir)
     intervention_dir = output_dir / 'intervention_test'
     intervention_dir.mkdir(parents=True, exist_ok=True)
-    
+
     print("="*80)
     print("INTERVENTION TEST: Causal Ablation via Artificial Extremes")
     print("="*80)
     print(f"Config: {fraction*100:.1f}% of Q/K values scaled by {scale}×")
     print(f"Output: {intervention_dir}")
     print()
-    
+
     intervention_config = {
         'targets': ['q', 'k'],
         'fraction': fraction,
         'scale': scale,
     }
-    
+
     # Find all checkpoints (searches all subdirs for checkpoint_*.pt)
     checkpoints_dir = output_dir / 'checkpoints'
     if not checkpoints_dir.exists():
@@ -849,25 +941,25 @@ def run_intervention_test(
         print("Please run training first:")
         print("  python scripts/experiments/run_muon.py --verification --epochs 10 --lr 0.1 --seeds 3")
         return
-    
+
     # PRIORITIZE: Only use FINAL checkpoints (epoch 9) from recent 10-epoch verification runs
     # This gives us one representative checkpoint per (activation, init, seed) combination
     checkpoint_files = []
-    
+
     for config_dir in sorted(checkpoints_dir.iterdir()):
         if not config_dir.is_dir():
             continue
-        
+
         metadata_file = config_dir / 'checkpoint_metadata.json'
         if not metadata_file.exists():
             continue
-        
+
         # Load metadata to check if it's from a recent run
         try:
             with open(metadata_file, 'r') as f:
                 metadata = json.load(f)
                 last_updated = metadata.get('last_updated', '')
-                
+
                 # Only include checkpoints from 2026-02-17 onwards (most recent 10-epoch runs)
                 if last_updated >= '2026-02-17':
                     # Look for epoch 9 checkpoint (final epoch of 10-epoch runs)
@@ -876,14 +968,14 @@ def run_intervention_test(
                         checkpoint_files.append(epoch_9_ckpts[0])  # Take first match
         except Exception as e:
             continue
-    
+
     if not checkpoint_files:
         print(f"ERROR: No recent final-epoch checkpoints found in {checkpoints_dir}")
         print("Looking for epoch 0009 checkpoints from 2026-02-17+")
         print("Please run training first:")
         print("  python scripts/experiments/run_muon.py --verification --epochs 10 --lr 0.1 --seeds 3")
         return
-    
+
     # Load results.json to map config_id to activation metadata (for backward compatibility)
     # This handles old checkpoints that don't have metadata embedded
     config_metadata_map = {}
@@ -903,40 +995,41 @@ def run_intervention_test(
                     }
         except Exception as e:
             print(f"Warning: Could not load {results_file}: {e}")
-    
+
     print(f"Found {len(checkpoint_files)} checkpoint(s)")
-    
+
     # Setup data (will eval on validation set)
     config = DEFAULT_CONFIG.copy()
     _, val_loader = setup_data(config, device)
-    
+
     results = []
-    
+
     for idx, ckpt_path in enumerate(sorted(checkpoint_files), 1):
         print(f"\n{'='*70}")
         print(f"Checkpoint {idx}/{len(checkpoint_files)}: {ckpt_path.name}")
-        
+
         # Load checkpoint
         try:
             ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
         except Exception as e:
             print(f"  ✗ Failed to load: {e}")
             continue
-        
+
         # Extract activation name and config from history (new checkpoints)
         # or from config_metadata_map (old checkpoints)
         history = ckpt.get('history', {})
-        
+
         # Get config_id from checkpoint directory name
         config_id = ckpt_path.parent.name
-        
+
         # Try to get metadata from history first, then fall back to results.json mapping
         activation_name = history.get('activation_name')
         init_name = history.get('init_name')
         a_value = history.get('a_value')
         seed = history.get('seed')
         stored_qk_clamp = history.get('qk_score_clamp')
-        
+        stored_norm_mode = history.get('norm_mode', norm_mode)
+
         if activation_name is None and config_id in config_metadata_map:
             # Fallback to results.json mapping for old checkpoints
             metadata = config_metadata_map[config_id]
@@ -958,40 +1051,42 @@ def run_intervention_test(
                     a_value = 1.0
             else:
                 a_value = 1.0  # Default
-            
+
             seed = metadata['seed']
             print(f"  Note: Using results.json metadata for old checkpoint")
-        
+
         if activation_name is None or activation_name == 'Unknown':
             print(f"  ✗ Cannot determine activation for config_id: {config_id}")
             continue
-        
+
         print(f"  Activation: {activation_name}")
         print(f"  Init: {init_name}, a={a_value}, seed={seed}")
-        
+
         # Reconstruct model (clean, no intervention)
         activation_configs = get_activation_configs()
-        act_conf = next((a for a in activation_configs if a['name'] == activation_name), None)
+        canonical_activation_name = _canonicalize_activation_name(activation_name)
+        act_conf = next((a for a in activation_configs if a['name'] == canonical_activation_name), None)
         if act_conf is None:
             print(f"  ✗ Unknown activation: {activation_name}")
             continue
-        
+
         # Create clean model
         a_val = a_value if a_value is not None else 1.0
         qk_activation = act_conf['factory'](a_val) if act_conf.get('is_softcap') else act_conf['factory'](1.0)
-        
+
         model_clean = ViTMuonResearch(
-            **{k: config[k] for k in ['img_size', 'patch_size', 'num_classes', 'embed_dim', 
+            **{k: config[k] for k in ['img_size', 'patch_size', 'num_classes', 'embed_dim',
                                        'depth', 'num_heads', 'mlp_ratio', 'dropout', 'drop_path']},
             qk_activation=qk_activation,
             track_attention_stats=True,
             qk_clip_threshold=qk_score_clamp,
             intervention_config=None,  # Clean
+            norm_mode=stored_norm_mode,
         ).to(device)
-        
+
         # Create intervention model (same architecture, different forward behavior)
         qk_activation_int = act_conf['factory'](a_val) if act_conf.get('is_softcap') else act_conf['factory'](1.0)
-        
+
         model_intervention = ViTMuonResearch(
             **{k: config[k] for k in ['img_size', 'patch_size', 'num_classes', 'embed_dim',
                                        'depth', 'num_heads', 'mlp_ratio', 'dropout', 'drop_path']},
@@ -999,8 +1094,9 @@ def run_intervention_test(
             track_attention_stats=True,
             qk_clip_threshold=qk_score_clamp,
             intervention_config=intervention_config,  # Corruption enabled
+            norm_mode=stored_norm_mode,
         ).to(device)
-        
+
         # Load weights into both
         try:
             model_clean.load_state_dict(ckpt['model_state_dict'])
@@ -1008,21 +1104,21 @@ def run_intervention_test(
         except Exception as e:
             print(f"  ✗ Failed to load weights: {e}")
             continue
-        
+
         # Evaluate both
         print("  Evaluating...")
         clean_metrics = validate(model_clean, val_loader, device)
         intervention_metrics = validate(model_intervention, val_loader, device)
-        
+
         acc_clean = clean_metrics['accuracy']
         acc_intervention = intervention_metrics['accuracy']
         degradation = acc_clean - acc_intervention
         degradation_pct = (degradation / acc_clean * 100) if acc_clean > 0 else 0
-        
+
         print(f"  Clean Accuracy:        {acc_clean:.2f}%")
         print(f"  Intervention Accuracy: {acc_intervention:.2f}%")
         print(f"  Degradation:           {degradation:.2f}% ({degradation_pct:.1f}% relative)")
-        
+
         # Store results
         results.append({
             'checkpoint': str(ckpt_path),
@@ -1036,41 +1132,41 @@ def run_intervention_test(
             'degradation_pct': float(degradation_pct),
             'intervention_config': intervention_config,
         })
-    
+
     # Save results
     results_path = intervention_dir / 'intervention_test_results.json'
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
-    
+
     # Summary
     print("\n" + "="*80)
     print("INTERVENTION TEST SUMMARY")
     print("="*80)
     print(f"{'Activation':<40} {'Clean':>10} {'Corrupt':>10} {'Degrad':>10}")
     print("-"*80)
-    
+
     for r in sorted(results, key=lambda x: x['degradation_pct'], reverse=True):
         print(f"{r['activation']:<40} {r['clean_accuracy']:>10.2f}% {r['intervention_accuracy']:>10.2f}% "
               f"{r['degradation_pct']:>10.1f}%")
-    
+
     # Interpretation
     print("\n" + "="*80)
     print("INTERPRETATION")
     print("="*80)
-    
+
     bounded_results = [
         r for r in results
         if any(x in r['activation'] for x in ['TanhSoftCap', 'SmoothNotch', 'QuinticNotch'])
     ]
     unbounded_results = [r for r in results if r['activation'] in ['ReLU', 'GELU']]
-    
+
     if bounded_results and unbounded_results:
         avg_degrad_bounded = np.mean([r['degradation_pct'] for r in bounded_results])
         avg_degrad_unbounded = np.mean([r['degradation_pct'] for r in unbounded_results])
-        
+
         print(f"Bounded activations avg degradation:   {avg_degrad_bounded:.1f}%")
         print(f"Unbounded activations avg degradation: {avg_degrad_unbounded:.1f}%")
-        
+
         if avg_degrad_bounded > avg_degrad_unbounded * 1.5:
             print("\n✓ SUPPORTS HYPOTHESIS: Bounded activations degrade more when extremes are injected")
             print("  → They rely on preventing extremes architecturally")
@@ -1078,7 +1174,7 @@ def run_intervention_test(
             print("\n✗ CONTRADICTS HYPOTHESIS: Unbounded activations are more sensitive to injected extremes")
         else:
             print("\n~ INCONCLUSIVE: Similar degradation across activation types")
-    
+
     print(f"\nResults saved to: {results_path}")
 
 
@@ -1095,12 +1191,17 @@ def run_preliminary_sweep(
     lr_override: Optional[float] = None,
     wd_override: Optional[float] = None,
     qk_score_clamp: Optional[float] = None,
+    qkv_targets: str = "qk",
     embed_dim_override: Optional[int] = None,
     depth_override: Optional[int] = None,
     num_heads_override: Optional[int] = None,
+    only_activations: Optional[List[str]] = None,
+    only_inits: Optional[List[str]] = None,
+    only_a_policies: Optional[List[str]] = None,
+    norm_mode: str = "layernorm",
 ):
     """Run the full preliminary sweep."""
-    
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1110,11 +1211,15 @@ def run_preliminary_sweep(
         f"_lr{_fmt_float_tag(lr_override)}"
         f"_wd{_fmt_float_tag(wd_override)}"
         f"_qkclamp{_fmt_float_tag(qk_score_clamp)}"
+        f"_norm{str(norm_mode or 'layernorm').strip().lower()}"
         f"_emb{embed_dim_override if embed_dim_override is not None else DEFAULT_CONFIG['embed_dim']}"
         f"_d{depth_override if depth_override is not None else DEFAULT_CONFIG['depth']}"
         f"_h{num_heads_override if num_heads_override is not None else DEFAULT_CONFIG['num_heads']}"
     )
-    
+    qkv_activation_targets = _parse_qkv_targets(qkv_targets)
+    if qkv_activation_targets != ("q", "k"):
+        run_tag += f"_qkv{''.join(qkv_activation_targets)}"
+
     # Load completed configs if resuming
     completed_file = output_dir / f"{run_tag}_completed_configs.json"
     completed_configs = set()
@@ -1122,7 +1227,7 @@ def run_preliminary_sweep(
         with open(completed_file, 'r') as f:
             completed_configs = set(json.load(f))
         print(f"Resuming: {len(completed_configs)} configs already completed")
-    
+
     # Setup data
     config = DEFAULT_CONFIG.copy()
     config['epochs'] = epochs
@@ -1132,14 +1237,14 @@ def run_preliminary_sweep(
         config['depth'] = int(depth_override)
     if num_heads_override is not None:
         config['num_heads'] = int(num_heads_override)
-    
+
     print(f"Setting up data loaders...")
     train_loader, val_loader = setup_data(config, device)
     print(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
-    
+
     # Get sweep configurations
     activation_configs = get_activation_configs()
-    
+
     init_configs = get_init_configs()
     a_policies = get_a_policies()
     lr_configs = get_lr_configs()
@@ -1151,38 +1256,48 @@ def run_preliminary_sweep(
         wd_configs = [wd_override]
 
     seeds = list(range(num_seeds))
-    
+
     # Filter configs based on mode
     if verification:
         print(f"\n{'!'*80}")
         print("VERIFICATION MODE: Running targeted Apples-to-Apples Comparison")
         print(f"{'!'*80}\n")
-        
-        # Define the exact Verification Set
-        # 1. TanhSoftCap + softcap_optimal + a=a*
-        # 2. SmoothNotchV2 + softcap_optimal + a=a*
-        # 3. QuinticNotch + softcap_optimal + a=a*
+
+        # Define the exact verification set.
+        # Default release subset:
+        # 1. SoftCap + softcap_optimal + a=a*
+        # 2. SwishCap + softcap_optimal + a=a*
+        # 3. SparseCap + softcap_optimal + a=a*
         # 4. ReLU + kaiming
         # 5. GELU + kaiming
-        
-        target_activations = {
-            'SoftCap': {'init': 'softcap_optimal', 'policy': 'a=a*'},
-            'SwishCap': {'init': 'softcap_optimal', 'policy': 'a=a*'},
-            'SparseCap': {'init': 'softcap_optimal', 'policy': 'a=a*'},
-            'ReLU': {'init': 'kaiming', 'policy': 'a=1.0'},
-            'GELU': {'init': 'kaiming', 'policy': 'a=1.0'},
-        }
-        
+        # Appendix-only bounded controls remain available via --only-activations.
+
+        verification_specs = get_verification_specs()
+
+        if only_activations:
+            requested = set(only_activations)
+            target_activations = {
+                name: spec
+                for name, spec in verification_specs.items()
+                if name in requested
+            }
+        else:
+            target_activations = {
+                name: spec
+                for name, spec in verification_specs.items()
+                if spec.get('default_enabled', True)
+            }
+
         # Override lists to generate only these combinations
         # We construct a custom list of (activation_config, init_name, policy_name) tuples to iterate
-        
+
         # Helper to find config objects
         act_lookup = {c['name']: c for c in activation_configs}
-        
+
         # We will use a custom iterator logic instead of the nested loops below?
         # To minimize code changes, we'll filter the lists dynamically or create a special list.
         # Actually, let's just create a list of "Tasks" and iterate that.
-        
+
         verification_tasks = []
         for act_name, specs in target_activations.items():
             if act_name not in act_lookup:
@@ -1193,27 +1308,36 @@ def run_preliminary_sweep(
                 'init': specs['init'],
                 'policy': specs['policy']
             })
-            
+
     elif softcap_only:
         activation_configs = [c for c in activation_configs if c.get('is_softcap', False)]
     elif quick:
         # Quick sanity check
-        activation_configs = activation_configs[:2]
+        activation_configs = _filter_named_configs(
+            activation_configs,
+            only_names=['ReLU', 'SoftCap'],
+            kind='activation',
+        )
         init_configs = init_configs[:2]
         a_policies = a_policies[:2]
         lr_configs = lr_configs[:1]
         wd_configs = wd_configs[:1]
         seeds = seeds[:1]
-    
+
+    # Optional user filters (primarily for targeted appendix/control ablations).
+    activation_configs = _filter_named_configs(activation_configs, only_names=only_activations, kind="activation")
+    init_configs = _filter_named_configs(init_configs, only_names=only_inits, kind="init")
+    a_policies = _filter_named_configs(a_policies, only_names=only_a_policies, kind="a_policy")
+
     # Logic for iteration
     # If verification, we have a specific list of tasks.
     # Otherwise, we have the Cartesian product.
-    
+
     # Common function to run a specific combination
     def execute_run(act_conf, init_name, policy_name, lr, wd, seed, run_idx, total_runs):
         init_conf = next(i for i in init_configs if i['name'] == init_name)
         policy_conf = next(p for p in a_policies if p['name'] == policy_name)
-        
+
         # Generate config ID (NOW INCLUDES EPOCHS for clean break)
         config_id = generate_config_id(
             act_conf['name'],
@@ -1221,15 +1345,17 @@ def run_preliminary_sweep(
             policy_conf['name'],
             lr, wd, seed, epochs,
             qk_score_clamp=qk_score_clamp,
+            qkv_activation_targets=qkv_activation_targets,
+            norm_mode=norm_mode,
         )
-        
+
         if config_id in completed_configs:
             return None
-            
+
         print(f"[{run_idx}/{total_runs}] "
               f"{act_conf['name']} | {init_conf['name']} | "
               f"{policy_conf['name']} | lr={lr} | wd={wd} | seed={seed}")
-              
+
         try:
             hist = run_single_experiment(
                 config, act_conf, init_conf, policy_conf,
@@ -1239,14 +1365,18 @@ def run_preliminary_sweep(
                 output_dir=output_dir,
                 resume=resume,
                 qk_score_clamp=qk_score_clamp,
+                qkv_activation_targets=qkv_activation_targets,
+                norm_mode=norm_mode,
             )
-            
+
             # Store result
             history_epochs = len(hist.get('val_acc', [])) or len(hist.get('train_loss', []))
             epochs_run = hist.get('divergence_epoch', 0) if hist['diverged'] else (history_epochs or hist.get('stopped_at_epoch', epochs))
             res = {
                 'config_id': config_id,
                 'activation': act_conf['name'],
+                'qkv_activation_targets': list(qkv_activation_targets),
+                'norm_mode': norm_mode,
                 'init': init_conf['name'],
                 'a_policy': policy_conf['name'],
                 'lr': lr,
@@ -1279,13 +1409,13 @@ def run_preliminary_sweep(
                     'grad_norm': hist['grad_norm'],
                 }
             }
-            
+
             status = "✓ OK" if not hist['diverged'] else "✗ DIVERGED"
             print(f"    {status} | Val Acc: {hist['best_val_acc']:.2f}% | "
                 f"Max QK(raw/post): {hist['max_recorded_qk_raw']:.2f}/{hist['max_recorded_qk_post_clip']:.2f}")
-                  
+
             return res
-            
+
         except Exception as e:
             print(f"    ✗ ERROR: {str(e)}")
             traceback.print_exc()
@@ -1293,14 +1423,14 @@ def run_preliminary_sweep(
 
     # Calculate total runs & plan execution
     tasks = []
-    
+
     if verification:
-        # Verification tasks: 5 variants * 2 seeds * 1 LR * 1 WD = 10 runs total
+        # Verification tasks: 7 variants * N seeds * 1 LR * 1 WD.
         target_lr = lr_configs[0]
         target_wd = wd_configs[0]
-        
+
         print(f"Verification Mode: Fixed LR={target_lr}, WD={target_wd}")
-        
+
         for task in verification_tasks:
             for seed in seeds:
                 tasks.append((task['activation'], task['init'], task['policy'], target_lr, target_wd, seed))
@@ -1308,30 +1438,32 @@ def run_preliminary_sweep(
         # Cartesian product
         init_lookup = {i['name']: i for i in init_configs}
         policy_lookup = {p['name']: p for p in a_policies}
-        
+
         for act_conf in activation_configs:
             # Filter inits/policies if verification mode was handled differently (it's handled above now)
             # Standard sweep logic:
             current_inits = init_configs
             current_policies = a_policies
-            
+
             for init_conf in current_inits:
                 for policy_conf in current_policies:
                      # Skip non-applicable a-policies for controls
                     if not act_conf['is_softcap'] and policy_conf['name'] != 'a=1.0':
                         continue
-                        
+
                     for lr in lr_configs:
                         for wd in wd_configs:
                             for seed in seeds:
                                 tasks.append((act_conf, init_conf['name'], policy_conf['name'], lr, wd, seed))
-                                
+
     total_runs = len(tasks)
     remaining_tasks = [
         t for t in tasks
         if generate_config_id(
             t[0]['name'], t[1], t[2], t[3], t[4], t[5], epochs,
             qk_score_clamp=qk_score_clamp,
+            qkv_activation_targets=qkv_activation_targets,
+            norm_mode=norm_mode,
         )
         not in completed_configs
     ]
@@ -1348,12 +1480,13 @@ def run_preliminary_sweep(
     print(f"Already completed: {total_runs - len(remaining_tasks)}")
     print(f"Remaining: {len(remaining_tasks)}")
     print(f"Output: {output_dir}")
+    print(f"Norm mode: {norm_mode}")
     print(f"{'='*80}\n")
-    
+
     # Results storage
     all_results = []
     results_file = output_dir / f"{run_tag}_results.json"
-    
+
     # Load existing results if resuming
     if resume and results_file.exists():
         with open(results_file, 'r') as f:
@@ -1361,8 +1494,8 @@ def run_preliminary_sweep(
 
     # Run loop
     start_time = time.time()
-    run_count = 0 
-    
+    run_count = 0
+
     for task in remaining_tasks:
         run_count += 1
         res = execute_run(*task, run_count, len(remaining_tasks))
@@ -1377,23 +1510,23 @@ def run_preliminary_sweep(
             if not replaced:
                 all_results.append(res)
             completed_configs.add(res['config_id'])
-            
+
             # Save incrementally
             with open(results_file, 'w') as f:
                 json.dump(all_results, f, indent=2)
-                
+
             with open(completed_file, 'w') as f:
                 json.dump(list(completed_configs), f)
-    
+
     # Final save
     with open(results_file, 'w') as f:
         json.dump(all_results, f, indent=2)
     with open(completed_file, 'w') as f:
         json.dump(list(completed_configs), f)
-    
+
     # Generate summary
     generate_summary(all_results, output_dir, run_tag=run_tag)
-    
+
     total_time = time.time() - start_time
     print(f"\n{'='*80}")
     print(f"Sweep Complete!")
@@ -1404,14 +1537,14 @@ def run_preliminary_sweep(
 
 def generate_summary(results: List[Dict[str, Any]], output_dir: Path, run_tag: str):
     """Generate summary statistics from sweep results."""
-    
+
     summary = {
         'total_runs': len(results),
         'successful_runs': len([r for r in results if not r.get('diverged', True) and 'error' not in r]),
         'diverged_runs': len([r for r in results if r.get('diverged', False)]),
         'error_runs': len([r for r in results if 'error' in r]),
     }
-    
+
     # Group by activation
     by_activation = {}
     for r in results:
@@ -1419,7 +1552,7 @@ def generate_summary(results: List[Dict[str, Any]], output_dir: Path, run_tag: s
         if act not in by_activation:
             by_activation[act] = []
         by_activation[act].append(r)
-    
+
     summary['by_activation'] = {}
     for act, runs in by_activation.items():
         successful = [r for r in runs if not r.get('diverged', True) and 'error' not in r]
@@ -1436,20 +1569,20 @@ def generate_summary(results: List[Dict[str, Any]], output_dir: Path, run_tag: s
             'mean_clip_fraction': np.mean([r['mean_clip_fraction'] for r in successful if not np.isnan(r.get('mean_clip_fraction', float('nan')))]) if successful else 0,
             'max_clip_fraction': max([r['max_clip_fraction'] for r in successful if not np.isnan(r.get('max_clip_fraction', float('nan')))], default=0),
         }
-    
+
     # Key findings
     summary['key_findings'] = {
         'softcap_stability': 'Pending analysis',
         'best_init_for_softcap': 'Pending analysis',
         'qk_score_comparison': 'Pending analysis',
     }
-    
+
     summary_file = output_dir / f"{run_tag}_summary.json"
     with open(summary_file, 'w') as f:
         json.dump(summary, f, indent=2)
-    
+
     print(f"\nSummary saved to: {summary_file}")
-    
+
     # Print quick summary
     print("\n--- Quick Summary ---")
     for act, stats in summary['by_activation'].items():
@@ -1462,7 +1595,7 @@ def generate_summary(results: List[Dict[str, Any]], output_dir: Path, run_tag: s
 def main():
     parser = argparse.ArgumentParser(description='Muon Optimizer Experiments')
     parser.add_argument('--output-dir', type=str,
-                        default='mechanistic_interpretability/optimizer_dynamics/muon/runs',
+                        default='runs/muon',
                         help='Output directory')
     parser.add_argument('--device', type=str,
                         default='cuda' if torch.cuda.is_available() else 'cpu',
@@ -1475,6 +1608,33 @@ def main():
                         help='Override weight decay (single value)')
     parser.add_argument('--qk-score-clamp', type=float, default=None,
                         help='Clamp pre-softmax attention scores to this max (proxy QK-clip baseline)')
+    parser.add_argument('--norm-mode', type=str, default='layernorm',
+                        choices=['layernorm', 'rmsnorm', 'identity'],
+                        help='Transformer normalization mode for the ViT blocks (default: layernorm)')
+    parser.add_argument(
+        "--qkv-targets",
+        type=str,
+        default="qk",
+        help="Where to inject the activation: q, k, qk, v, qkv (default: qk).",
+    )
+    parser.add_argument(
+        "--only-activations",
+        type=str,
+        default=None,
+        help="Comma-separated activation names to run (e.g., ReLU6,HardTanh). Default: all.",
+    )
+    parser.add_argument(
+        "--only-inits",
+        type=str,
+        default=None,
+        help="Comma-separated init names to run (e.g., kaiming,softcap_optimal). Default: all.",
+    )
+    parser.add_argument(
+        "--only-a-policies",
+        type=str,
+        default=None,
+        help="Comma-separated a-policy names to run (e.g., a=1.0,a=a*). Default: all.",
+    )
     parser.add_argument('--embed-dim', type=int, default=None,
                         help='Override ViT embedding dim for replication axis')
     parser.add_argument('--depth', type=int, default=None,
@@ -1490,7 +1650,7 @@ def main():
     parser.add_argument('--softcap-only', action='store_true',
                         help='Run SoftCap variants only (skip controls)')
     parser.add_argument('--verification', action='store_true',
-                        help='Run targeted verification set (Top 2 SoftCap + Controls)')
+                        help='Run targeted verification set (canonical 7-way set; can be filtered with --only-activations)')
     parser.add_argument('--quick', action='store_true',
                         help='Quick sanity check mode')
     parser.add_argument('--resume', action='store_true', default=True,
@@ -1499,9 +1659,9 @@ def main():
                         help='Start fresh (do not resume)')
     parser.add_argument('--stop-at-epoch', type=int, default=None,
                         help='Pause execution at this epoch (for resumable runs)')
-    
+
     args = parser.parse_args()
-    
+
     if args.intervention_test:
         run_intervention_test(
             output_dir=Path(args.output_dir),
@@ -1509,6 +1669,7 @@ def main():
             fraction=args.intervention_fraction,
             scale=args.intervention_scale,
             qk_score_clamp=args.qk_score_clamp,
+            norm_mode=args.norm_mode,
         )
     else:
         run_preliminary_sweep(
@@ -1524,9 +1685,14 @@ def main():
             lr_override=args.lr,
             wd_override=args.wd,
             qk_score_clamp=args.qk_score_clamp,
+            qkv_targets=args.qkv_targets,
             embed_dim_override=args.embed_dim,
             depth_override=args.depth,
             num_heads_override=args.num_heads,
+            only_activations=_parse_csv_names(args.only_activations),
+            only_inits=_parse_csv_names(args.only_inits),
+            only_a_policies=_parse_csv_names(args.only_a_policies),
+            norm_mode=args.norm_mode,
         )
 
 

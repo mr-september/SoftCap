@@ -15,7 +15,7 @@ authors:
 version: "1.0.0"
 date-released: "2026-03-01"
 license: Apache-2.0
-repository-code: "https://github.com/softcap-research/softcap"
+repository-code: "https://github.com/mr-september/SoftCap"
 abstract: >
   SoftCap introduces a family of three parametric activation functions
   (SoftCap, SwishCap, SparseCap) with bounded output range and controlled

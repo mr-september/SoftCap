@@ -236,7 +236,7 @@ def write_outputs(out_dir: Path, results: List[RunResult], summary: Dict[str, Di
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--output-dir", default="mechanistic_interpretability/signal_propagation/matched_init_matrix_20260224")
+    ap.add_argument("--output-dir", default="runs/signal_propagation/matched_init_matrix")
     ap.add_argument("--data-root", default="data/fashion_mnist")
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--batch-size", type=int, default=256)

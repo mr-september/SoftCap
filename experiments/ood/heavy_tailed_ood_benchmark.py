@@ -667,7 +667,7 @@ def main():
     parser.add_argument('--lr',            type=float, default=1e-3)
     parser.add_argument('--n-seeds',       type=int, default=5)
     parser.add_argument('--output-dir',    type=str,
-                        default='mechanistic_interpretability/latent_geometry/ood/heavy_tailed/standard')
+                        default='runs/ood/heavy_tailed/standard')
     parser.add_argument('--resume',        dest='resume', action='store_true', default=True)
     parser.add_argument('--no-resume',     dest='resume', action='store_false')
     parser.add_argument('--force',         action='store_true', default=False)

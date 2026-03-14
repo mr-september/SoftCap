@@ -762,7 +762,7 @@ def main():
     
     # Paths & misc
     parser.add_argument('--output-dir', type=str, 
-                        default='mechanistic_interpretability/latent_geometry/contrastive/results',
+                        default='runs/representation/simclr',
                         help='Output directory')
     parser.add_argument(
         '--disable-monitoring',

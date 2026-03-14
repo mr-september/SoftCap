@@ -1,17 +1,3 @@
-# Copyright 2026 Larry Cai and Jie Tang
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """
 Compatibility functions for main.py and other legacy imports.
 
@@ -23,7 +9,7 @@ from typing import Dict, Any
 import torch
 from torch.utils.data import DataLoader
 
-from .activations import get_default_activations
+from .activations import get_default_activations, get_full_default_activations
 from .data import get_mnist_loaders
 from .config import get_experiment_config as _get_experiment_config
 from .models import get_model_for_analysis as _get_model_for_analysis
@@ -36,7 +22,7 @@ def get_all_activations() -> Dict[str, torch.nn.Module]:
     Returns:
         Dictionary mapping activation names to instances
     """
-    return get_default_activations()
+    return get_full_default_activations()
 
 
 def load_mnist_data(batch_size: int = 64) -> Dict[str, DataLoader]:
