@@ -1,0 +1,38 @@
+{
+  "xor": {
+    "bce": {
+      "SoftCap": {
+        "n_seeds": 1.0,
+        "diverged_runs": 0.0,
+        "best_metric_mean": 0.923828125,
+        "best_metric_std": 0.0,
+        "final_metric_mean": 0.919921875,
+        "final_metric_std": 0.0,
+        "strict_zero_fraction_mean": 0.5028638652726716,
+        "strict_zero_fraction_std": 0.0,
+        "near_zero_fraction_mean": 0.503567564721201,
+        "near_zero_fraction_std": 0.0,
+        "derivative_zero_fraction_mean": 0.5028638652726716,
+        "derivative_zero_fraction_std": 0.0,
+        "derivative_near_zero_fraction_mean": 0.5028638652726716,
+        "derivative_near_zero_fraction_std": 0.0
+      },
+      "ReLU": {
+        "n_seeds": 1.0,
+        "diverged_runs": 0.0,
+        "best_metric_mean": 0.87109375,
+        "best_metric_std": 0.0,
+        "final_metric_mean": 0.87109375,
+        "final_metric_std": 0.0,
+        "strict_zero_fraction_mean": 0.4694405350030637,
+        "strict_zero_fraction_std": 0.0,
+        "near_zero_fraction_mean": 0.4741785386029412,
+        "near_zero_fraction_std": 0.0,
+        "derivative_zero_fraction_mean": 0.4694405350030637,
+        "derivative_zero_fraction_std": 0.0,
+        "derivative_near_zero_fraction_mean": 0.4694405350030637,
+        "derivative_near_zero_fraction_std": 0.0
+      }
+    }
+  }
+}

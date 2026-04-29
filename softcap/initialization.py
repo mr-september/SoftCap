@@ -53,7 +53,7 @@ from typing import Optional, Literal
 # Empirically derived gains for SoftCap variants at a=1.0.
 # Measured by scripts/theory/compute_gains_and_propagation.py (500k MC samples).
 # Gain := std(f(x)) / std(x) for x ~ N(0,1).
-SOFTLU_GAINS = {
+SOFTCAP_GAINS = {
     'tanh_softcap': 0.3459,
     'smooth_notch_v2': 0.5267,    # V2 (different negative-side geometry)
     'quintic_notch': 0.4012,
@@ -86,7 +86,7 @@ def calculate_softcap_gain(
         >>> gain = calculate_softcap_gain('tanh_softcap', param_a=1.0)
         >>> std = gain / math.sqrt(fan_in)
     """
-    base_gain = SOFTLU_GAINS.get(variant, 0.7)
+    base_gain = SOFTCAP_GAINS.get(variant, 0.7)
 
     # Heuristic parametric adjustment. The true gain-vs-a relationship is
     # nonlinear and variant-specific — this approximation can be 40%+ off.

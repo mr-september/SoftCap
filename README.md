@@ -1,30 +1,18 @@
-# Beyond ReLU and GELU: SoftCap Bounded Activations for Stability and Sparsity
+# Designing Bounded Activations: Geometric Control of Neural Network Stability, Sparsity, Quantization, and Energy-Based Models
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org/)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red.svg)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ![SoftCap Family](paper/figures/fig1_softcap_family.png)
 
-## Overview
+## Abstract
 
-`SoftCap` is the public sister repository for the v2 preprint. It exposes a
-small, stable release surface:
+We introduce the **SoftCap family**, bounded rectifying activations derived from explicit continuity and sparsity constraints rather than empirical search. The family comprises **SoftCap** ($C^0$), **SwishCap** ($C^1$), and **SparseCap** ($C^2$), all sharing a bounded positive branch $a\tanh(x)$ with analytically derived, variance-preserving scalars $a^*$.
 
-- Core family: `SoftCap`, `SwishCap`, `SparseCap`
-- Release controls: `ReLU`, `Tanh`, `GELU`, `SiLU`
-- Appendix-only bounded controls: `ReLU6`, `HardTanh` via explicit opt-in helpers
-- Single paper-facing runner: `python scripts/run_paper_experiments.py ...`
+This repository provides the core implementation and experimental suite for the paper. We demonstrate that bounded activations provide geometric control over neural network dynamics, improving stability in high-learning-rate regimes, enhancing robustness to heavy-tailed noise, and providing architectural constraints for quantization and energy-based models.
 
-The current bundled paper PDF is the refreshed v2 preprint: [main.pdf](main.pdf).
-
-## Canonical Activation Set
-
-| Canonical name | Legacy alias | Role |
-| :--- | :--- | :--- |
-| **SoftCap** | `ParametricTanhSoftCap` | Bounded half-rectifier baseline |
-| **SwishCap** | `ParametricSmoothNotchTanhSoftCapV2` | Smooth negative-branch Cap variant |
-| **SparseCap** | `ParametricQuinticNotchTanhSoftCap` | Hard-zero sparse Cap variant |
+---
 
 ## Install
 
@@ -34,42 +22,41 @@ cd SoftCap
 pip install -r requirements.txt
 ```
 
-## Quick Usage
+## PyTorch Implementation & Quick Usage
+
+The canonical PyTorch implementations of the SoftCap family are provided in `softcap/activations.py`.
 
 ```python
 import torch
-from softcap.activations import SparseCap
+from softcap.activations import SoftCap, SwishCap, SparseCap
 
-act = SparseCap(a_init=1.0)
+# Recommended initialization (a*) is derived from variance mapping
+from softcap.control_activations import A_STAR_VALUES
+
+act = SparseCap(a_init=A_STAR_VALUES["SparseCap"])
 x = torch.randn(32, 128)
 y = act(x)
 ```
 
-## Reproducibility
+## Research Tracks
 
-The public reproduction surface is the paper runner:
+This repository is organized into several research tracks corresponding to the main experiments in the paper:
 
-```bash
-python scripts/run_paper_experiments.py --help
-```
+- **Grokking & Stability**: Stress-testing continuity and boundedness in high-LR modular arithmetic.
+- **OOD Robustness**: Evaluating behavior under heavy-tailed and angular covariate shifts.
+- **NLP (NanoGPT)**: Decoder-only transformer scaling with bounded attention projections (Q/K).
+- **Robustness Probe**: Testing activation mechanism consistency across objective families (BCE, Hinge, MSE, InfoNCE).
+- **Muon-trained ViTs**: Evaluation in high-performance vision transformers.
 
-Run one paper-facing experiment:
-
-```bash
-python scripts/run_paper_experiments.py grokking --profile paper
-python scripts/run_paper_experiments.py ood-heavy --profile paper
-python scripts/run_paper_experiments.py ood-angular --profile paper
-python scripts/run_paper_experiments.py muon --profile paper
-python scripts/run_paper_experiments.py confounds --profile paper
-```
-
-Or run the main bundle:
+To run the experiments:
 
 ```bash
+# Run a quick smoke test for all main experiments
+python scripts/run_paper_experiments.py all-main --profile quick
+
+# Run full paper reproduction (requires GPU)
 python scripts/run_paper_experiments.py all-main --profile paper
 ```
-
-`--profile quick` is the smoke-test mode for each experiment.
 
 ## Tests
 
@@ -81,16 +68,16 @@ pytest tests/
 
 If you use this work, please cite the preprint:
 
-**Cai, L., & Tang, J. (2026). Beyond ReLU and GELU: SoftCap Bounded Activations for Stability and Sparsity. Zenodo. https://doi.org/10.5281/zenodo.18829083**
+**Cai, L., & Tang, J. (2026). Designing Bounded Activations: Geometric Control of Neural Network Stability, Sparsity, Quantization, and Energy-Based Models. Zenodo. https://doi.org/10.5281/zenodo.18829082**
 
 ```bibtex
-@article{cai2026beyond,
-  title={Beyond ReLU and GELU: SoftCap Bounded Activations for Stability and Sparsity},
+@article{cai2026designing,
+  title={Designing Bounded Activations: Geometric Control of Neural Network Stability, Sparsity, Quantization, and Energy-Based Models},
   author={Cai, Larry and Tang, Jie},
   journal={Zenodo},
   year={2026},
-  doi={10.5281/zenodo.18829083},
-  url={https://doi.org/10.5281/zenodo.18829083}
+  doi={10.5281/zenodo.18829082},
+  url={https://doi.org/10.5281/zenodo.18829082}
 }
 ```
 

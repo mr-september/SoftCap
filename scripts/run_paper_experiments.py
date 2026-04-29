@@ -27,6 +27,8 @@ EXPERIMENT_ORDER = (
     "ood-heavy",
     "ood-angular",
     "muon",
+    "nanogpt",
+    "robustness",
 )
 
 
@@ -185,24 +187,106 @@ def _build_confounds_command(args: argparse.Namespace) -> List[str]:
     return command
 
 
+def _build_nanogpt_command(args: argparse.Namespace) -> List[str]:
+    command = [
+        _python_bin(args),
+        "experiments/nlp/train_nanogpt.py",
+        "--activation",
+        "SoftCap",
+        "--mlp-activation",
+        "SoftCap",
+    ]
+    if args.profile == "quick":
+        command.extend(
+            [
+                "--epochs",
+                "1",
+                "--batch-size",
+                "4",
+                "--block-size",
+                "64",
+                "--eval-max-batches",
+                "5",
+                "--log-dir",
+                "runs/paper/nanogpt_quick",
+            ]
+        )
+    else:
+        command.extend(
+            [
+                "--epochs",
+                "3",
+                "--batch-size",
+                "16",
+                "--block-size",
+                "256",
+                "--log-dir",
+                "runs/paper/nanogpt",
+            ]
+        )
+    return command
+
+
+def _build_robustness_command(args: argparse.Namespace) -> List[str]:
+    command = [
+        _python_bin(args),
+        "experiments/robustness/objective_family_probe.py",
+    ]
+    if args.profile == "quick":
+        command.extend(
+            [
+                "--epochs",
+                "2",
+                "--probe-epochs",
+                "2",
+                "--n-seeds",
+                "1",
+                "--max-samples",
+                "100",
+                "--output-dir",
+                "runs/paper/robustness_quick",
+            ]
+        )
+    else:
+        command.extend(
+            [
+                "--epochs",
+                "50",
+                "--probe-epochs",
+                "20",
+                "--n-seeds",
+                "3",
+                "--output-dir",
+                "runs/paper/robustness",
+            ]
+        )
+    return command
+
+
 def build_commands(experiment: str, args: argparse.Namespace) -> List[List[str]]:
     builders = {
         "grokking": [_build_grokking_command],
         "ood-heavy": [_build_ood_heavy_command],
         "ood-angular": [_build_ood_angular_command],
         "muon": [_build_muon_command],
+        "nanogpt": [_build_nanogpt_command],
+        "robustness": [_build_robustness_command],
         "confounds": [_build_confounds_command],
         "all-main": [
             _build_grokking_command,
             _build_ood_heavy_command,
             _build_ood_angular_command,
             _build_muon_command,
+            _build_nanogpt_command,
+            _build_robustness_command,
         ],
         "all-release": [
             _build_grokking_command,
             _build_ood_heavy_command,
             _build_ood_angular_command,
             _build_muon_command,
+            _build_nanogpt_command,
+            _build_robustness_command,
             _build_confounds_command,
         ],
     }
@@ -231,7 +315,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "experiment",
-        choices=("grokking", "ood-heavy", "ood-angular", "muon", "confounds", "all-main", "all-release"),
+        choices=("grokking", "ood-heavy", "ood-angular", "muon", "nanogpt", "robustness", "confounds", "all-main", "all-release"),
         help="Paper-facing experiment or bundle to run.",
     )
     parser.add_argument(
