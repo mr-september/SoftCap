@@ -68,17 +68,8 @@ pytest tests/
 
 If you use this work, please cite the preprint:
 
-**Cai, L., & Tang, J. (2026). Designing Bounded Activations: Geometric Control of Neural Network Stability, Sparsity, Quantization, and Energy-Based Models. Zenodo. https://doi.org/10.5281/zenodo.18829082**
-
 ```bibtex
-@article{cai2026designing,
-  title={Designing Bounded Activations: Geometric Control of Neural Network Stability, Sparsity, Quantization, and Energy-Based Models},
-  author={Cai, Larry and Tang, Jie},
-  journal={Zenodo},
-  year={2026},
-  doi={10.5281/zenodo.18829082},
-  url={https://doi.org/10.5281/zenodo.18829082}
-}
+This repository is anonymized for double-blind review. A full citation to the published paper and the corresponding reproducibility archives will be provided upon de-anonymization.
 ```
 
 ## License
