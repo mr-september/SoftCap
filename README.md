@@ -8,9 +8,11 @@
 
 ## Abstract
 
-We introduce the **SoftCap family**, bounded rectifying activations derived from explicit continuity and sparsity constraints rather than empirical search. The family comprises **SoftCap** ($C^0$), **SwishCap** ($C^1$), and **SparseCap** ($C^2$), all sharing a bounded positive branch $a\tanh(x)$ with analytically derived, variance-preserving scalars $a^*$.
+While unbounded activations like ReLU and SiLU drive modern architectures, their lack of geometric constraints creates shared failure modes for stability, quantization, and implicit modeling. We address this with a constraints-first design framework yielding the **SoftCap family**, a $C^0$-$C^2$ progression of bounded rectifiers: **SoftCap** (exact-zero), **SwishCap** ($C^1$ derivative-matched), and **SparseCap** ($C^2$ quintic notch), ready as drop-in replacements. These functions are derived in closed form and anchored by variance-preserving initialization, replacing benchmark-driven empirical search with principled forward constraints.
 
-This repository provides the core implementation and experimental suite for the paper. We demonstrate that bounded activations provide geometric control over neural network dynamics, improving stability in high-learning-rate regimes, enhancing robustness to heavy-tailed noise, and providing architectural constraints for quantization and energy-based models.
+In high-learning-rate grokking stress tests, SwishCap ($a=1$, fixed) achieves 100% survival across all 16 aggressive configurations, supporting the mechanism that origin-adjacent recovery geometry and tight forward scale jointly expand the safe operating region. In transformers, the SoftCap family provides raw perplexity gains over standard GELU baselines while reducing peak attention scores by 3--4$\times$, decreasing reliance on explicit clamping; concurrently, bounded FFNs suppress post-activation outliers and reduce dynamic INT8 quantization sensitivity. Across heavy-tailed OOD shifts, the same bounded geometry compresses outlier logit gaps by up to 85$\times$. Structurally, SparseCap natively generates 8.9% structural sparsity in NanoGPT query activations, establishing the mathematical foundation for sparse attention without post-hoc thresholding.
+
+Finally, in diagnostic EBMs, bounded geometry reshapes the learned energy/score field: the SoftCap family suppresses score-tail excursions, reduces spurious drift across disconnected modes, and raises the high-fidelity sampling ceiling in controlled topologies. Together, these findings support geometric activation bounds as a shared mechanism for regulating failure modes across explicit and implicit architectures, offering a unified framework for robust model design.
 
 ---
 
