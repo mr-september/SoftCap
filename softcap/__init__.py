@@ -11,7 +11,7 @@ from importlib import import_module
 
 
 __version__ = "1.0.0"
-__author__ = "Larry Cai, Jie Tang"
+__author__ = "Anonymous Authors"
 __description__ = "Beyond ReLU and GELU: SoftCap Bounded Activations for Stability and Sparsity"
 
 

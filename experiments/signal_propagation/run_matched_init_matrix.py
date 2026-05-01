@@ -9,7 +9,7 @@ Common run family:
 - Task: Fashion-MNIST classification
 - Activations: SoftCap / SwishCap / SparseCap / ReLU / GELU / SiLU
 - Inits: Xavier / Kaiming / Orthogonal
-# Copyright 2026 Larry Cai and Jie Tang
+# Copyright 2026 Anonymous Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
